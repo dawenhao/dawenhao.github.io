@@ -462,44 +462,11 @@ var Main=(function(){
 		Laya.init(750,1334,WebGL);
 		Laya.stage.bgColor="white";
 		MusicCore.Instance().Init();
-		AudioManager.Instance().Load("Audio/yycy.mp3");
+		AudioManager.Instance().Play("Audio/yycy.mp3");
 	}
 
 	__class(Main,'Main');
 	return Main;
-})()
-
-
-/**
-*...
-*@author ...
-*/
-//class Manager.AssetManager
-var AssetManager=(function(){
-	function AssetManager(){}
-	__class(AssetManager,'Manager.AssetManager');
-	var __proto=AssetManager.prototype;
-	__proto.LoadMusic=function(scr){
-		Laya.loader.load([{url:scr,type:"sound"}],Handler.create(this,this.OnMusicLoaded),Handler.create(this,this.OnMusicLoadProgress));
-	}
-
-	__proto.OnMusicLoaded=function(){
-		AudioManager.Instance().Play();
-	}
-
-	__proto.OnMusicLoadProgress=function(progress){
-		ViewMain.Instance.GetCurrentProgress.text=progress;
-	}
-
-	AssetManager.Instance=function(){
-		if (AssetManager._instance==null){
-			AssetManager._instance=new AssetManager();
-		}
-		return AssetManager._instance;
-	}
-
-	AssetManager._instance=null;
-	return AssetManager;
 })()
 
 
@@ -517,12 +484,9 @@ var AudioManager=(function(){
 	__class(AudioManager,'Manager.AudioManager');
 	var __proto=AudioManager.prototype;
 	__proto.Init=function(){}
-	__proto.Load=function(src){
-		AssetManager.Instance().LoadMusic(src);
+	//}
+	__proto.Play=function(src){
 		this.mAudioSrc=src;
-	}
-
-	__proto.Play=function(){
 		this.mAudio.src=this.mAudioSrc;
 		this.mAudio.play();
 	}
