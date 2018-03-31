@@ -459,6 +459,7 @@ var Main=(function(){
 		Laya.init(750,1334,WebGL);
 		Laya.stage.bgColor="red";
 		MusicCore.Instance().Init();
+		AudioManager.Instance().Play("Audio/yycy.mp3");
 	}
 
 	__class(Main,'Main');
@@ -472,14 +473,18 @@ var Main=(function(){
 */
 //class Manager.AudioManager
 var AudioManager=(function(){
-	function AudioManager(){}
-	__class(AudioManager,'Manager.AudioManager');
-	var __proto=AudioManager.prototype;
-	__proto.Init=function(){
-		alert("恭喜你看到了我初始化audio管理器");
+	function AudioManager(){
+		this.mAudio=new Audio();
 	}
 
-	__proto.Play=function(musicName){}
+	__class(AudioManager,'Manager.AudioManager');
+	var __proto=AudioManager.prototype;
+	__proto.Init=function(){}
+	__proto.Play=function(src){
+		this.mAudio.src=src;
+		this.mAudio.play();
+	}
+
 	__proto.Pause=function(){}
 	__proto.Stop=function(){}
 	__proto.Dispose=function(){}
