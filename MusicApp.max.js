@@ -474,7 +474,7 @@ var Main=(function(){
 		this.hr.once("progress",this,this.onHttpRequestProgress);
 		this.hr.once("complete",this,this.onHttpRequestComplete);
 		this.hr.once("error",this,this.onHttpRequestError);
-		this.hr.send('http://api.map.baidu.com/location/ip?ak=tfhLDZ5ekMc3MVeIaUjXR4ZHnHgrDFMc',null,'get','json',["Content-Type","application/x-www-form-urlencoded"]);
+		this.hr.send('https://api.map.baidu.com/location/ip','ak=tYN6MjAxkItyYk6lDxsCvUIRdyT3QQwQ','post','json');
 	}
 
 	__proto.showLogger=function(){
