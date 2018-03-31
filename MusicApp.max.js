@@ -459,45 +459,18 @@ var MusicCore=(function(){
 //class Main
 var Main=(function(){
 	function Main(){
-		this.hr=null;
-		this.logger=null;
 		Laya.init(750,1334,WebGL);
 		Laya.stage.bgColor="white";
-		this.showLogger();
-		this.Request();
+		var myCity=new BMap.LocalCity();
+		myCity.get(this.myFun);
 	}
 
 	__class(Main,'Main');
 	var __proto=Main.prototype;
-	__proto.Request=function(){
-		this.hr=new HttpRequest();
-		this.hr.once("progress",this,this.onHttpRequestProgress);
-		this.hr.once("complete",this,this.onHttpRequestComplete);
-		this.hr.once("error",this,this.onHttpRequestError);
-		this.hr.send('https://api.map.baidu.com/location/ip','ak=tYN6MjAxkItyYk6lDxsCvUIRdyT3QQwQ','post','json');
-	}
-
-	__proto.showLogger=function(){
-		this.logger=new Text();
-		this.logger.fontSize=30;
-		this.logger.color="#FFFFFF";
-		this.logger.align='center';
-		this.logger.valign='middle';
-		this.logger.size(Laya.stage.width,Laya.stage.height);
-		this.logger.text="等待响应...\n";
-		Laya.stage.addChild(this.logger);
-	}
-
-	__proto.onHttpRequestError=function(e){
-		console.log(e);
-	}
-
-	__proto.onHttpRequestProgress=function(e){
-		console.log(e)
-	}
-
-	__proto.onHttpRequestComplete=function(e){
-		this.logger.text+="收到数据："+this.hr.data;
+	__proto.myFun=function(result){
+		var cityName=result.name;
+		alert("当前定位城市:"+cityName);
+		console.log(cityName);
 	}
 
 	return Main;
