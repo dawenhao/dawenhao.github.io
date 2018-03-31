@@ -463,8 +463,8 @@ var Main=(function(){
 		this.logger=null;
 		Laya.init(750,1334,WebGL);
 		Laya.stage.bgColor="white";
-		this.Request();
 		this.showLogger();
+		this.Request();
 	}
 
 	__class(Main,'Main');
@@ -474,7 +474,7 @@ var Main=(function(){
 		this.hr.once("progress",this,this.onHttpRequestProgress);
 		this.hr.once("complete",this,this.onHttpRequestComplete);
 		this.hr.once("error",this,this.onHttpRequestError);
-		this.hr.send('http://api.map.baidu.com/location/ip','ak=tfhLDZ5ekMc3MVeIaUjXR4ZHnHgrDFMc','get','json');
+		this.hr.send('http://api.map.baidu.com/location/ip?ak=tfhLDZ5ekMc3MVeIaUjXR4ZHnHgrDFMc',null,'get','json');
 	}
 
 	__proto.showLogger=function(){
