@@ -461,18 +461,10 @@ var Main=(function(){
 	function Main(){
 		Laya.init(750,1334,WebGL);
 		Laya.stage.bgColor="white";
-		var myCity=new BMap.LocalCity();
-		myCity.get(this.myFun);
+		var name=Location();
 	}
 
 	__class(Main,'Main');
-	var __proto=Main.prototype;
-	__proto.myFun=function(result){
-		var cityName=result.name;
-		alert("当前定位城市:"+cityName);
-		console.log(cityName);
-	}
-
 	return Main;
 })()
 
@@ -38258,7 +38250,7 @@ var ViewMain=(function(_super){
 })(MainUI)
 
 
-	Laya.__init([EventDispatcher,LoaderManager,Render,DrawText,Browser,View$2,WebGLContext2D,ShaderCompile,Timer,GraphicAnimation,LocalStorage,AtlasGrid]);
+	Laya.__init([EventDispatcher,LoaderManager,Render,DrawText,View$2,WebGLContext2D,ShaderCompile,Timer,GraphicAnimation,LocalStorage,AtlasGrid,Browser]);
 	/**LayaGameStart**/
 	new Main();
 
