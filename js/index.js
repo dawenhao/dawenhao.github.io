@@ -2,8 +2,6 @@ $(function(){
 	Init();
 });
 
-var xhr;
-
 //function Init() {
 //	var geolocation = new qq.maps.Geolocation("Z4UBZ-UHNWF-Q4AJQ-NVQ7P-FURZ7-3AFRT", "myWeb");
 //	geolocation.getLocation(showPosition, null);
@@ -15,21 +13,7 @@ var xhr;
 //};
 
 function Init() {
-	$.ajax({
-		type:"get",
-		url:"http://v.juhe.cn/toutiao/index",
-		data:{
-			type:'top',
-			key:'14464207dad298fc22fd9f685cb55954'
-		},
-		dataType:'json',
-		success:function(data){
-			alert(data);
-		},
-		error:function(error,Msgerror){
-			alert("错误"+error);
-		}
-	});
+	alert("感谢你的来访，只是我还没想好做什么。。。");
 //	mui.ajax('http://v.juhe.cn/toutiao/index',{
 //		data:{
 //			type:'top',
