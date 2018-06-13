@@ -13,7 +13,7 @@ $(function(){
 //};
 
 function Init() {
-	alert("感谢你的来访，只是我还没想好做什么。。。");
+//	alert("感谢你的来访，只是我还没想好做什么。。。");
 //	mui.ajax('http://v.juhe.cn/toutiao/index',{
 //		data:{
 //			type:'top',
