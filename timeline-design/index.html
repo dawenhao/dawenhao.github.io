@@ -1,0 +1,2003 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>XTimeline 设计文档</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 20px;
+    line-height: 1.7;
+    color: #333;
+    background: #fafafa;
+  }
+  h1 { color: #1a1a1a; border-bottom: 2px solid #667eea; padding-bottom: 10px; }
+  h2 { color: #333; margin-top: 40px; }
+  h3 { color: #555; margin-top: 30px; }
+  pre { background: #f4f4f8; padding: 16px; border-radius: 8px; overflow-x: auto; }
+  code { background: #f4f4f8; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+  th, td { border: 1px solid #e0e0e0; padding: 8px 12px; text-align: left; }
+  th { background: #f0f0f0; }
+  blockquote { border-left: 4px solid #667eea; margin: 16px 0; padding: 8px 16px; background: #f9f9ff; }
+  .nav { margin-bottom: 40px; }
+  .nav a { color: #667eea; text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="nav"><a href="/">← 返回主页</a></div>
+<div class="content">
+
+# XTimeline 设计文档与使用说明
+
+> **版本**: 1.0.0  
+> **Unity 版本要求**: Unity 2022.3+  
+> **包名**: `com.the.xtimeline`
+
+---
+
+## 目录
+
+1. [系统概述](#1-系统概述)
+2. [工程架构](#2-工程架构)
+3. [核心数据模型（Runtime）](#3-核心数据模型runtime)
+4. [编辑器系统（Editor）](#4-编辑器系统editor)
+5. [业务子系统](#5-业务子系统)
+6. [Bridge 桥接层](#6-bridge-桥接层)
+7. [Attribute 特性系统](#7-attribute-特性系统)
+8. [条件系统（Condition）](#8-条件系统condition)
+9. [控制器系统（Controller）](#9-控制器系统controller)
+10. [AI 行为树系统](#10-ai-行为树系统)
+11. [蓝图系统（Blueprint）](#11-蓝图系统blueprint)
+12. [样条曲线（Spline）](#12-样条曲线spline)
+13. [扩展指南](#13-扩展指南)
+14. [典型工作流](#14-典型工作流)
+15. [类图与关系总览](#15-类图与关系总览)
+- [附录 A：关键设计决策](#附录-a关键设计决策)
+- [附录 B：命名空间映射](#附录-b命名空间映射)
+- [附录 C：设计缺陷与 Bug 报告](#附录-c设计缺陷与-bug-报告)
+- [附录 D：XTimeline.Runtime 代码优化与性能优化建议](#附录-dxtimelineruntime-代码优化与性能优化建议)
+
+---
+
+## 1. 系统概述
+
+XTimeline 是一套 **自定义时间轴编辑器框架**，设计目标是脱离 Unity Timeline 的 PlayableGraph 依赖，提供一套完全 **纯数据驱动**、**可序列化为 JSON** 的时间轴系统，用于游戏中的技能编辑、过场剧情、Buff 配置、控制器状态机等需要"时间轴 + 多轨道 + 片段"的场景。
+
+### 核心设计理念
+
+| 理念 | 说明 |
+|------|------|
+| **纯数据驱动** | Runtime 数据层完全不依赖 Unity Engine（`noEngineReferences: true`），可独立于 Unity 运行 |
+| **编辑器/运行时分离** | 通过 4 个 Assembly 严格隔离编辑器逻辑与运行时数据 |
+| **Bridge 模式** | 通过桥接接口（Config、Json、Logger、Audio）解耦外部依赖 |
+| **泛型轨道模型** | 基于 `XTimelineTrackAsset<T>` 泛型模式，一个轨道类型对应一种片段类型 |
+| **Attribute 驱动扩展** | 通过 `[MenuName]`、`[TrackType]`、`[TrackColor]`、`[TrackClipType]` 等特性声明式注册轨道 |
+| **支持多种配置类型** | Skill（`.clip`）、Director（`.director`）、Buff（`.buff`）、Story（`.story`）、Sequence（`.seq`）、Controller（`.xcontroller`）、Blueprint（`.bp`）、AI（`.ai`） |
+
+---
+
+## 2. 工程架构
+
+### 2.1 程序集（Assembly）分层
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    XTimeline.Unity.Editor                        │
+│  (Assets/_Scripts/XTimeline/Editor/)                            │
+│  业务编辑器：Skill/Story/Controller/AI/Blueprint 编辑窗口       │
+│  依赖: XTimeline.Editor, XTimeline.Unity.Runtime               │
+├─────────────────────────────────────────────────────────────────┤
+│                    XTimeline.Editor                              │
+│  (Packages/com.the.xtimeline@1.0.0/Editor/)                   │
+│  核心编辑器框架：Window、TreeView、GUI、Actions、Manipulators   │
+│  依赖: XTimeline.Runtime, UnityEditor                          │
+├─────────────────────────────────────────────────────────────────┤
+│                    XTimeline.Unity.Runtime                       │
+│  (Assets/_Scripts/XTimeline/Runtime/)                           │
+│  业务数据：Skill/Story/Controller/AI/Blueprint 数据定义          │
+│  依赖: XTimeline.Runtime, UnityEngine                          │
+├─────────────────────────────────────────────────────────────────┤
+│                    XTimeline.Runtime                             │
+│  (Packages/com.the.xtimeline@1.0.0/Runtime/)                  │
+│  核心数据模型：Track、Clip、Marker、Condition、Bridge           │
+│  依赖: The.Interface, The.Math  (无 Unity 引擎依赖)            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 目录结构
+
+```
+Packages/com.the.xtimeline@1.0.0/
+├── Runtime/                          # 核心运行时（引擎无关）
+│   ├── Attributes/                   # 特性定义
+│   ├── Bridges/                      # 桥接层（Config/Json/Logger/Audio/Resource）
+│   ├── Clips/                        # ClipAsset 基类
+│   ├── Controller/                   # 条件系统基础类型
+│   │   └── Conditions/               # XTimelineCondition 及相关枚举
+│   ├── Data/                         # BaseObject、FrameRate、Language
+│   ├── Events/                       # IMarker 接口
+│   ├── Extensions/                   # 扩展方法
+│   ├── Interfaces/                   # IConfig、IAudio、IDispose 及实现
+│   ├── Markers/                      # XTimelineMarker、MarkerNode、MarkerMethod
+│   ├── Spline/                       # XSpline 样条曲线（Bezier）
+│   ├── Tracks/                       # TrackAsset、XTimelineTrackAsset<T>、TrackEntityBase
+│   └── Utilities/                    # Hash/Time/String/Object/Runtime 工具类
+│
+├── Editor/                           # 核心编辑器
+│   ├── Actions/                      # Action 系统（Copy/Paste/Delete/Timeline/Track/Marker）
+│   ├── Attribute/                    # 编辑器特性（InspectorData/Shortcut/MenuEntry）
+│   ├── Common/                       # Explorer 树
+│   ├── Extensions/                   # 编辑器扩展方法
+│   ├── GUI/                          # GUI 渲染（Clip/Track/Inspector）
+│   ├── Inspectors/                   # Inspector 面板
+│   ├── Items/                        # ItemsGroup
+│   ├── Manipulators/                 # 交互操作器（拖拽/裁剪/移动/缩放/右键菜单）
+│   ├── Objects/                      # ViewObject
+│   ├── State/                        # WindowState（时间/播放/刷新）
+│   ├── TreeView/                     # 树形视图（数据源/绘制/拖拽/排序）
+│   ├── Undo/                         # 撤销系统
+│   ├── Utilities/                    # 工具类（Graphics/Icon/Track/System/Scope）
+│   └── Window/                       # XTimelineWindowBase 窗口框架
+│
+Assets/_Scripts/XTimeline/
+├── Runtime/                          # 业务运行时数据
+│   ├── Skill/                        # 技能系统
+│   │   ├── Clips/                    # 各类 Clip（Animation/Attack/Effect/Camera...）
+│   │   ├── Configs/                  # SkillConfig/DirectorConfig/BuffConfig/GraphicConfig
+│   │   ├── Constaint/                # 约束
+│   │   ├── Data/                     # 数据结构（Camera/Bake/Common）
+│   │   ├── Entities/                 # SkillTrackEntity/DirectorTrackEntity...
+│   │   ├── Tracks/                   # 各类 Track 定义
+│   │   └── Utilities/                # 运行时工具
+│   ├── Story/                        # 剧情系统（结构同 Skill）
+│   ├── Controller/                   # 控制器状态机
+│   ├── AI/                           # AI 行为树
+│   └── Blueprint/                    # 蓝图系统
+│
+└── Editor/                           # 业务编辑器
+    ├── Skill/                        # 技能编辑窗口
+    ├── Story/                        # 剧情编辑窗口
+    ├── Controller/                   # 控制器编辑窗口
+    ├── AI/                           # AI 编辑器
+    ├── Blueprint/                    # 蓝图编辑器
+    └── Tools/                        # 工具窗口集合
+```
+
+---
+
+## 3. 核心数据模型（Runtime）
+
+### 3.1 类继承体系
+
+```
+BaseObject                               # 自定义对象基类（提供 InstanceID、Name、相等性比较）
+├── TrackAsset                           # 轨道基类
+│   ├── XTimelineTrackAsset<T>           # 泛型轨道（持有 List<T> Clips）
+│   │   ├── XTimelineTrackAnimation      # 动画轨道
+│   │   ├── XTimelineTrackEffect         # 特效轨道
+│   │   └── ...（约 40+ 种轨道）
+│   ├── XTimelineTrackEntityBase         # 实体轨道（持有多种子轨道的容器）
+│   │   ├── SkillTrackEntity             # 技能实体
+│   │   ├── DirectorTrackEntity          # 导演实体
+│   │   ├── StoryTrackEntity             # 剧情实体
+│   │   └── BuffTrackEntity              # Buff 实体
+│   └── XTimelineMarker                  # Marker 轨道（持有 List<MarkerNode>）
+│
+├── ClipAsset                            # 片段基类
+│   ├── XTimelineAnimation               # 动画片段
+│   ├── XTimelineAttack                  # 攻击片段
+│   ├── XTimelineEffect                  # 特效片段
+│   ├── XTimelineCamera                  # 摄像机片段
+│   └── ...（约 40+ 种片段）
+│
+└── XTimelineMarkerNode                  # Marker 节点（实现 IMarker）
+
+XTimelineConfigBase                      # 配置基类（非 BaseObject 子类）
+├── SkillConfig                          # 技能配置
+├── DirectorConfig                       # 导演配置
+├── BuffConfig                           # Buff 配置
+├── StoryConfig                          # 剧情配置
+└── GraphicConfig                        # 图形配置
+```
+
+### 3.2 BaseObject
+
+```csharp
+namespace XTimeline.Runtime
+{
+    public class BaseObject
+    {
+        int m_InstanceID;       // 自增唯一 ID
+        string m_Name;          // 对象名称
+
+        // 提供 GetInstanceID()、GetHashCode()、Equals()、隐式 bool 转换
+        // 模拟 UnityEngine.Object 的行为，但不依赖 Unity
+    }
+}
+```
+
+**设计要点**：
+- 使用 `kBaseId` 静态自增计数器生成全局唯一 ID
+- 重载了 `==`/`!=` 运算符和 `implicit operator bool`，模拟 Unity Object 的空检查语义
+- 所有 Track、Clip、Marker 的基类
+
+### 3.3 ClipAsset（片段基类）
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `Start` | `double` | 片段起始时间（秒） |
+| `Duration` | `double` | 片段时长（秒） |
+| `TimeScale` | `double` | 时间缩放倍率（默认 1.0） |
+| `DisplayName` | `string` | 显示名称 |
+| `ClipCaps` | `ClipCaps` | 片段内有效时长结束后的延续状态（None/Looping/Hold） |
+| `PostCaps` | `ClipCaps` | 片段结束后的延续状态 |
+| `AssetDuration` | `float` | 片段的有效内容长度（如动画时长） |
+| `IgnoreTime` | `bool` | 是否忽略时间 |
+
+**关键方法**：
+
+| 方法 | 说明 |
+|------|------|
+| `GetEnd()` | 返回 `Start + Duration` |
+| `ToLocalTimeUnbound(time)` | 全局时间转片段本地时间 |
+| `FromLocalTimeUnbound(time)` | 片段本地时间转全局时间 |
+| `SetParentTrack(track)` | 设置父轨道，自动维护轨道的 Clip 列表 |
+| `InTime(target)` | 判断当前 Clip 是否在 target Clip 的时间范围内 |
+| `SupportDragClipLength()` | 是否支持在编辑器中拖拽修改长度（可覆写） |
+
+### 3.4 TrackAsset（轨道基类）
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `Locked` | `bool` | 是否锁定 |
+| `Muted` | `bool` | 是否静音 |
+| `DisplayName` | `string` | 轨道显示名称 |
+| `IsCondition` | `bool` | 是否需要条件激活 |
+| `Conditions` | `List<XTimelineCondition>` | 激活条件列表 |
+
+**关键方法**：
+
+| 方法 | 说明 |
+|------|------|
+| `GetClips()` | 获取轨道下所有片段（虚方法） |
+| `GetSubTracks()` | 获取子轨道 |
+| `GetMarkers()` | 获取 Marker 列表 |
+| `SetParent(parent)` | 设置父轨道（维护父子关系） |
+| `GetLockedInHierarchy()` | 检查层级中是否有锁定的父轨道 |
+| `SortClips()` | 按起始时间排序片段 |
+| `GetStart()` / `GetEnd()` | 获取轨道的时间范围（由 Clip 计算） |
+
+### 3.5 XTimelineTrackAsset\<T\>（泛型轨道）
+
+```csharp
+[TrackType(TrackType.Escape)]
+public class XTimelineTrackAsset<T> : TrackAsset where T : ClipAsset
+{
+    public List<T> Clips { get; set; } = new List<T>();
+}
+```
+
+- 持有强类型的 `Clips` 列表
+- 通过缓存的 `List<ClipAsset>` 向上层提供统一的 `GetClips()` 接口
+- 插入 Clip 时按 `Start` 时间排序插入
+
+### 3.6 XTimelineTrackEntityBase（实体轨道）
+
+实体轨道是**子轨道的容器**，代表时间轴上的一个"实体"（如角色、特效、摄像机等）。
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `Resource` | `string` | 关联资源 |
+| `GUID` | `string` | 资源 GUID |
+| `Collapsed` | `bool` | 是否折叠 |
+| `Marker` | `XTimelineMarker` | 实体级 Marker |
+
+**核心机制**：
+- 通过 `Dictionary<Type, IList> m_Caches` 存储不同类型的子轨道
+- 派生类（如 `SkillTrackEntity`）通过 `BindTracks()` 方法将各类 Track 列表注册到缓存中
+- `GetSubTracks()` 汇总所有子轨道返回
+
+### 3.7 XTimelineConfigBase（配置基类）
+
+配置是整个时间轴数据的顶层容器。
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `Name` | `string` | 配置名称 |
+| `Duration` | `double` | 总时长 |
+| `LogicDuration` | `double` | 逻辑时长 |
+| `Loop` | `bool` | 是否循环 |
+| `IsMarker` | `bool` | 是否显示全局 Marker |
+| `Marker` | `XTimelineMarker` | 全局 Marker 轨道 |
+| `TimeType` | `XTimelineTimeType` | 时间类型（None/Hold/Loop） |
+
+**初始化流程**：
+
+```
+Initialize<T>()
+  ├── CacheRuntimeClips()    # 虚方法，由子类实现缓存 Clip 到 RuntimeId 字典
+  └── CacheMarkers()         # 缓存 Marker 到 RuntimeId 字典
+
+InitializeInEditorMode()
+  ├── BindEntities()          # 虚方法，由子类绑定实体列表
+  └── InitializeEntitiesInEditorMode()  # 遍历实体调用 BindTracks + Marker 初始化
+```
+
+**Runtime ID 系统**：
+- 每个 Clip 和 Marker 在初始化时分配一个递增的 `RuntimeId`
+- 通过 `GetClip(runtimeId)` / `GetMarker(runtimeId)` 快速查找
+- 支持 `SetOffsetTime(offsetTime)` 批量偏移所有 Clip 和 Marker 的时间
+
+### 3.8 Marker 系统
+
+```
+XTimelineMarker : TrackAsset
+├── Nodes: List<XTimelineMarkerNode>
+
+XTimelineMarkerNode : BaseObject, IMarker
+├── Time: double                     # 触发时间
+├── PostCaps: ClipCaps               # 结束后状态
+├── Methods: List<XTimelineMarkerMethod>  # 事件方法列表
+└── Conditions: List<XTimelineCondition>  # 触发条件
+
+XTimelineMarkerMethod (struct)
+├── Name: string                     # 事件名称
+└── Args: string                     # 事件参数
+```
+
+Marker 是时间轴上的**事件标记点**，可以在指定时间触发一组方法调用，并支持条件过滤。
+
+### 3.9 DiscreteTime（离散时间）
+
+使用 `Int64` 内部表示的高精度时间类型，精度为 `1e-12` 秒。提供 `double`/`float`/`int` 的隐式/显式转换。用于避免浮点数精度问题导致的时间比较错误。
+
+### 3.10 FrameRate（帧率）
+
+支持标准帧率（15/30/60 FPS）和 Drop Frame 模式。提供比较运算符和格式化输出。
+
+---
+
+## 4. 编辑器系统（Editor）
+
+### 4.1 窗口架构
+
+```
+XTimelineWindowBase : EditorWindow        # 编辑器窗口基类
+├── Config: XTimelineConfigBase            # 当前编辑的配置数据
+├── Settings: XTimelineWindowSettings      # 窗口设置
+├── State: WindowState                     # 窗口状态管理
+├── View: ViewControl                      # 视图控制
+├── Selection: Selection                   # 选择管理
+├── TimeArea: XTimelineTimeArea            # 时间轴区域
+├── Extension: XTimelineWindowExtensionGUI # 扩展 GUI
+├── DragReference: XTimelineDragReference  # 拖拽引用
+├── Styles: XDirectorStyles                # 样式
+└── RectangleSelect                        # 框选
+```
+
+**窗口生命周期**：
+
+```
+WindowBorn(params)         # 最早的初始化入口
+  └── OnWindowBorn()
+
+InitializeTimeline(path)   # 加载配置并初始化
+  ├── InitializeTimelineWindow()
+  │   ├── OnPreInitializeWindow()
+  │   ├── XTimelinePreferences.CreateInstance()
+  │   ├── InitializeSettings()
+  │   ├── Selection = new Selection()
+  │   ├── State = new WindowState()
+  │   ├── ViewControl.InitializeViews()
+  │   ├── InitializeManipulators()
+  │   ├── BindEvents()
+  │   └── OnPostInitializeWindow()
+  │
+  ├── LoadConfig(path)
+  │   ├── Config.Initialize()
+  │   └── MainConfig = Config
+  │
+  └── InitializeTimeline()
+      ├── OnPreInitialize()
+      ├── View.Initialize()
+      ├── OnInitialize()
+      ├── State.Initialize()
+      ├── ShowAllFrame()
+      └── OnInitializeFinished()
+```
+
+### 4.2 WindowState（状态管理）
+
+| 功能 | 说明 |
+|------|------|
+| `Sequence` | 当前播放序列状态（Time/Frame） |
+| `TypeCache` | 类型缓存（缓存 Track/Clip 类型信息） |
+| `TimeFormat` | 时间显示格式 |
+| `EdgeSnaps` | 是否启用边缘吸附 |
+| `ShowMarkerHeader` | 是否显示 Marker 头部 |
+| `TimeAreaShownRange` | 时间轴可视范围 |
+| `IsPlaying` / `SetPlaying()` | 播放控制 |
+| `TimeToPixel()` / `PixelToTime()` | 时间/像素坐标转换 |
+| `Refresh()` / `Evaluate()` | 刷新和求值 |
+
+### 4.3 刷新机制
+
+```csharp
+[Flags]
+public enum RefreshReason
+{
+    WindowNeedsRedraw       = 1 << 0,  // 窗口重绘
+    SceneNeedsUpdate        = 1 << 1,  // 场景更新
+    ContentsModified        = 1 << 2,  // 内容修改
+    ContentsAddedOrRemoved  = 1 << 3   // 元素增删
+}
+```
+
+刷新由 `XTimelineEditor.Refresh(state, reason)` 统一分发：
+- `ContentsAddedOrRemoved` → 完全重建 (`state.Refresh()`)
+- `ContentsModified` → 标记图重建 (`state.RebuildGraph`)
+- `SceneNeedsUpdate` → 求值更新 (`state.Evaluate()`)
+
+### 4.4 Action 系统
+
+Action 是编辑器操作的抽象，支持菜单注册、快捷键绑定和有效性验证。
+
+```
+IAction                            # 操作接口
+├── TimelineAction                 # 时间轴级操作（Copy/Paste/Delete/Select All...）
+├── TrackAction                    # 轨道级操作
+├── ClipAction                     # 片段级操作
+└── MarkerAction                   # Marker 级操作
+```
+
+**ActionContext** 封装了操作上下文：
+```csharp
+struct ActionContext
+{
+    double? InvocationTime;          // 调用时间
+    XTimelineConfigBase Timeline;    // 当前配置
+    IEnumerable<TrackAsset> Tracks;  // 选中的轨道
+    IEnumerable<ClipAsset> Clips;    // 选中的片段
+    IEnumerable<IMarker> Markers;    // 选中的 Marker
+}
+```
+
+**ActionManager** 自动通过反射发现所有 Action 子类，按类型分组缓存，支持通过 `[MenuEntry]` 特性注册到右键菜单。
+
+### 4.5 Inspector 系统
+
+```
+XTimelineInspectorBase                   # Inspector 基类
+├── m_Data: BaseObject                   # 当前检查的数据对象
+├── m_Window: XTimelineWindowBase        # 所属窗口
+├── Initialize(data, window)             # 初始化
+├── InspectorGUI()                       # GUI 绘制入口
+├── OnSceneGUI(SceneView)               # Scene 视图绘制
+├── DoubleClick()                        # 双击事件
+└── Dispose()                            # 释放
+```
+
+派生的 Inspector 类：
+- `XTimelineInspectorTrackAsset` — 轨道 Inspector
+- `XTimelineInspectorClipAsset` — 片段 Inspector
+- `XTimelineInspectorTrackEntity` — 实体轨道 Inspector
+- `XTimelineInspectorClipMarker` — Marker Inspector
+- `XTimelineInspectorTrackMarker` — Marker 轨道 Inspector
+
+### 4.6 ClipEditor / TrackEditor
+
+通过 `[CustomTimelineEditor(typeof(MyClip))]` 特性注册自定义编辑器：
+
+```csharp
+// TrackEditor<T> — 自定义轨道编辑器
+public class TrackEditor<T> where T : ClipAsset
+{
+    protected XTimelineTrackAsset<T> m_Config;
+    protected virtual void OnInitialize() { }
+    protected virtual void OnTrackGUI() { }
+}
+
+// ClipEditor — 自定义 Clip 编辑器
+// 通过 CustomTimelineEditorCache 根据 Clip 类型自动查找对应的 ClipEditor
+```
+
+### 4.7 Manipulator（交互操作器）
+
+编辑器中的交互操作通过 Manipulator 模式实现：
+
+| Manipulator | 功能 |
+|-------------|------|
+| `TrimClipManipulator` | 裁剪片段长度 |
+| `MoveItemMode*` | 移动片段（Mix/Replace/Ripple 三种模式） |
+| `AddDeleteItemMode*` | 添加/删除片段 |
+| `MarkerManipulator` | Marker 拖拽 |
+| `ContextMenuManipulator` | 右键菜单 |
+| `TimelineDoubleClickManipulator` | 双击操作 |
+| `EditModeInputHandler` | 编辑模式输入处理 |
+| `XTimelinePanManipulator` | 平移时间轴 |
+| `TimeAreaAutoPanner` | 自动平移 |
+
+### 4.8 TreeView
+
+编辑器左侧的轨道树结构：
+
+| 组件 | 说明 |
+|------|------|
+| `XTimelineTreeView` | 主树视图 |
+| `XTimelineDataSource` | 数据源 |
+| `XTimelineDragging` | 拖拽支持 |
+| `TreeViewController` | 控制器 |
+| `TreeViewState` | 视图状态 |
+| `XTimelineGroupGUI` | 分组 GUI |
+| `XTimelineTrackGUI` | 轨道 GUI |
+| `XTimelineClipGUI` | 片段 GUI |
+| `XTimelineMarkerGUI` | Marker GUI |
+
+### 4.9 Undo 系统
+
+```
+XTimelineUndo           # 撤销操作封装
+XTimelineUndoSystem     # 撤销系统管理
+UndoSystem              # 底层 Undo 实现
+UndoScope               # Undo 作用域（using 模式）
+```
+
+---
+
+## 5. 业务子系统
+
+### 5.1 Skill（技能系统）
+
+**配置结构**：
+```
+SkillConfig : XTimelineConfigBase
+├── Entities: List<SkillTrackEntity>      # 实体列表
+├── Controller: string                     # 关联的控制器名称
+└── _controls: List<SkillConfig>          # 控制器引用的子配置
+
+SkillTrackEntity : XTimelineTrackEntityBase
+├── Type: SkillEntityType                  # 实体类型
+│   (Character/Effect/Client/ClientVfx/Control/Attack)
+├── Controls: List<XTimelineTrackControl>
+├── Animations: List<XTimelineTrackAnimation>
+├── Movements: List<XTimelineTrackMovement>
+├── Effects: List<XTimelineTrackEffect>
+├── Cameras: List<XTimelineTrackCamera>
+├── Attacks(Boxes): List<XTimelineTrackAttack>
+└── ...（约 30+ 种轨道类型）
+```
+
+**轨道与片段对应关系**（示例）：
+
+| 轨道 | 片段 | 用途 |
+|------|------|------|
+| `XTimelineTrackAnimation` | `XTimelineAnimation` | 动画播放 |
+| `XTimelineTrackAttack` | `XTimelineAttack` | 攻击判定 |
+| `XTimelineTrackEffect` | `XTimelineEffect` | 特效播放 |
+| `XTimelineTrackCamera` | `XTimelineCamera` | 摄像机控制 |
+| `XTimelineTrackMovement` | `XTimelineMovement` | 位移控制 |
+| `XTimelineTrackShake` | `XTimelineShake` | 震屏 |
+| `XTimelineTrackAudio` | `XTimelineAudio` | 音频播放 |
+| `XTimelineTrackCombo` | `XTimelineCombo` | 连招 |
+| `XTimelineTrackBattleEvent` | `XTimelineBattleEvent` | 战斗事件 |
+| `XTimelineTrackScale` | `XTimelineScale` | 时间缩放 |
+| `XTimelineTrackActive` | `XTimelineActive` | 激活/隐藏 |
+
+**片段定义示例**：
+```csharp
+[MenuName(LanguageConst.AnimationClipName)]
+public class XTimelineAnimation : ClipAsset
+{
+    public AnimationType Type { get; set; } = AnimationType.Clip;
+    public string Resource { get; set; }   // 动画资源路径
+    public string GUID { get; set; }       // 资源 GUID
+    public int Layer { get; set; }         // 动画层
+    public float Speed { get; set; } = 1;  // 播放速度
+}
+```
+
+**轨道定义示例**：
+```csharp
+[MenuName(LanguageConst.AnimationTrackName)]
+[RelationEntity((int)SkillEntityType.Character)]    // 关联角色实体
+[TrackType(TrackType.Track, "AnimationClip Icon")]   // 子轨道类型 + 图标
+[TrackColor(0, 255f, 255f)]                          // 轨道颜色（青色）
+[TrackClipType(typeof(XTimelineAnimation))]           // 接受的 Clip 类型
+public class XTimelineTrackAnimation : XTimelineTrackAsset<XTimelineAnimation> { }
+```
+
+**配置类型与文件后缀**：
+
+| Config | 后缀 | 用途 |
+|--------|------|------|
+| `SkillConfig` | `.clip` | 技能配置 |
+| `DirectorConfig` | `.director` | 导演/过场配置 |
+| `BuffConfig` | `.buff` | Buff 配置 |
+| `GraphicConfig` | — | 图形配置 |
+
+### 5.2 Story（剧情系统）
+
+```
+StoryConfig : XTimelineConfigBase
+├── Entities: List<StoryTrackEntity>
+
+StoryTrackEntity : XTimelineTrackEntityBase
+├── Controls / Animations / Textures / Cameras
+├── Transforms / Actives / Audios / Dialogues
+├── Materials / Sfxs / Queues / Volumes / Curtains
+```
+
+剧情系统的结构与技能系统类似，但包含对话（Dialogue）、过场帷幕（Curtain）、音效（Sfx）、排队等剧情特有轨道。
+
+### 5.3 文件后缀汇总
+
+| 后缀 | 说明 |
+|------|------|
+| `.clip` | 技能配置 |
+| `.director` | 导演配置 |
+| `.buff` | Buff 配置 |
+| `.story` | 剧情配置 |
+| `.seq` | 序列配置 |
+| `.xcontroller` | 控制器配置 |
+| `.bp` | 蓝图配置 |
+| `.ai` | AI 配置 |
+
+---
+
+## 6. Bridge 桥接层
+
+XTimeline Runtime 通过 Bridge 模式解耦外部依赖，使核心数据层可以在无 Unity 引擎的环境下运行。
+
+### 6.1 XTimelineBridge（核心桥接器）
+
+```csharp
+public static class XTimelineBridge
+{
+    internal static IAudio Audio;        // 音频接口
+    internal static ILogger Logger;      // 日志（来自 GlobalUtils.LOG）
+    internal static IJson Json;          // JSON 序列化（来自 GlobalUtils.JSON）
+    internal static IConfig Config;      // 配置加载
+    internal static bool Initialized;
+
+    public static void Bind(IAudio audio);          // 绑定音频实现
+    internal static void InitializeInEditor();       // 编辑器模式初始化
+    public static void Dispose();                    // 释放
+}
+```
+
+### 6.2 具体桥接
+
+| Bridge | 用途 | 方法 |
+|--------|------|------|
+| `ConfigBridge` | 配置加载 | `Get<T>(name)`, `Reload<T>(name)`, `Exist(name)` |
+| `JsonBridge` | JSON 序列化 | `ToString(obj)`, `ToObject<T>(bytes)` |
+| `LoggerBridge` | 日志输出 | `Info/Mark/Warning/Error/Critical` |
+| `AudioBridge` | 音频控制 | （待扩展） |
+| `ResourceBridge` | 资源加载 | `LoadAsset<T>`, `ExistAsset`, `GetAssetPath` |
+
+### 6.3 接口定义
+
+```csharp
+internal interface IConfig : IDispose
+{
+    T Get<T>(string assetName) where T : XTimelineConfigBase;
+    T Reload<T>(string assetName) where T : XTimelineConfigBase;
+    bool Exist(string assetName);
+}
+
+public interface IAudio : IDispose { }
+public interface IDispose { void Dispose(); }
+```
+
+`Config` 实现使用内部字典缓存已加载的配置，通过 `ResourceBridge` 加载资源。
+
+---
+
+## 7. Attribute 特性系统
+
+XTimeline 使用丰富的特性（Attribute）来声明式地定义轨道和片段的元数据。
+
+| 特性 | 目标 | 说明 |
+|------|------|------|
+| `[MenuName("名称")]` | Class | 在编辑器菜单中显示的名称 |
+| `[TrackType(TrackType)]` | Class | 轨道分类：`Entity`（实体轨道）、`Track`（子轨道）、`Escape`（不显示） |
+| `[TrackColor(r, g, b)]` | Class | 轨道和片段在编辑器中的颜色（0-255 RGB） |
+| `[TrackClipType(typeof(Clip))]` | Class | 轨道可接受的 Clip 类型（支持多个） |
+| `[TrackLimit(count)]` | Class | 轨道数量上限 |
+| `[RelationEntity(entityType)]` | Class | 子轨道与哪种实体类型关联 |
+| `[TrackEntity("名称", type)]` | Class | 实体轨道可创建的实体类型（支持多个） |
+
+### TrackType 枚举
+
+```csharp
+public enum TrackType
+{
+    Escape = 0,   // 不显示轨道
+    Track  = 1,   // 子轨道
+    Entity = 2    // 实体轨道
+}
+```
+
+---
+
+## 8. 条件系统（Condition）
+
+条件系统用于控制轨道/Marker/状态转换的执行条件。
+
+### 8.1 XTimelineCondition
+
+```csharp
+public class XTimelineCondition
+{
+    public XTimelineValueType Type;       // 数据类型
+    public string Name;                    // 条件名称
+    public XTimelineCompareInt CompareInt;     // Int 比较方式
+    public XTimelineCompareFloat CompareFloat; // Float 比较方式
+    public float Float;                    // Float 值
+    public int Int;                        // Int 值
+    public bool Bool;                      // Bool 值
+    public bool Trigger;                   // Trigger 值
+    public bool SimpleTrigger;             // 是否当前帧重置 Trigger
+    public bool IsCondition;               // 是否是条件
+    public string Condition;               // 条件表达式
+}
+```
+
+### 8.2 数据类型
+
+```csharp
+public enum XTimelineValueType { Float, Int, Bool, Trigger }
+```
+
+### 8.3 比较类型
+
+```csharp
+// Int 和 Float 共享相同的比较方式
+Greater / GreaterEquals / Less / LessEquals / Equals / NotEqual
+```
+
+### 8.4 XTimelineConditionGroup
+
+条件组包含两个条件列表（`List` 和 `Components`），**任一列表满足即算条件达成**。
+同时支持 `HasExitTime` + `ExitTime`（百分比）+ `Duration`（秒）的退出时间控制。
+
+---
+
+## 9. 控制器系统（Controller）
+
+控制器系统实现了类似 Unity Animator Controller 的**有限状态机（FSM）**，用于管理角色动画状态、技能切换等需要条件驱动的状态流转场景。
+
+### 9.1 整体架构
+
+```
+XTimelineControllerConfig : XTimelineControllerConfigBase
+├── Type: ControllerType                # 控制器类型（Default/TemplateBoard/TemplateLayer/TemplateSubNode/Override）
+├── Boards: List<XTimelineCondition>    # 全局条件变量板（参数黑板）
+├── Layers: List<LayerConfig>           # 层级列表（多层独立运行，支持 Override/Additive 混合）
+├── MainAsset / MainAssetGUID           # 关联的主资源（SkillConfig）
+├── BoardAsset: string                  # 模板场景下引用的外部 Board 数据
+├── Transition: Vector2                 # 编辑器视口偏移
+└── Scale: Vector2                      # 编辑器视口缩放
+```
+
+### 9.2 节点体系
+
+所有节点继承自 `ControllerNode`，通过 `int ID` 标识，ID 范围由 `ConfigConst` 严格划分：
+
+| 节点类型 | 类名 | ID 范围 | 说明 |
+|----------|------|---------|------|
+| 入口节点 | `ControllerEntryNode` | `-1` (EntryID) | 每层/子状态机唯一入口 |
+| 任意状态 | `ControllerAnyNode` | `-2` (AnyID) | 可从任何状态触发转换 |
+| 退出节点 | `ControllerExitNode` | `-3` (ExitID) | 子状态机退出标记 |
+| 片段节点 | `ControllerClipNode` | `0~9999` (ClipStart~ClipEnd) | 关联 SkillConfig 资源 |
+| 子状态机 | `ControllerSubNode` | `≥10000` (SubStart) | 嵌套状态机，内含 Entry/Any/Exit/Clips/Transitions |
+| 混合树 | `ControllerBlendTreeNode` | `≥10000` | 递归树结构 `BlendTree`，每个子节点有 Threshold/Position/TimeScale |
+
+`ControllerNode` 核心字段：
+
+```csharp
+public class ControllerNode
+{
+    public int ID;           // 节点唯一标识
+    public string GUID;      // 全局唯一标识
+    public string Display;   // 显示名称
+    public Vector2 Position; // 编辑器中坐标位置
+    public string Asset;     // 关联资源名称
+}
+```
+
+判断节点类型的静态方法：
+- `ControllerNode.IsEntryNode(id)` / `IsAnyNode(id)` / `IsExitNode(id)` — 特殊节点判定
+- `ControllerNode.IsClipNode(id)` — ClipStart ≤ id ≤ ClipEnd
+- `ControllerNode.IsSubNode(id)` — id ≥ SubStart
+
+### 9.3 LayerConfig 层配置
+
+每层（`LayerConfig`）独立维护一组完整的状态机：
+
+```
+LayerConfig
+├── Entry / Any / Exit                         # 三个固定节点
+├── Clips: List<ControllerClipNode>            # 片段节点集合
+├── Subs: List<ControllerSubNode>              # 子状态机集合
+├── BlendTrees: List<ControllerBlendTreeNode>  # 混合树集合
+├── Transitions: List<ControllerTransition>    # 状态转换规则
+├── Name / Mask / MaskGUID                     # 层名称、骨骼遮罩
+├── BlendingType: MaskBlendingType             # Override 或 Additive
+├── Template: string                           # 层模板资源名
+└── Overrides: Dictionary<string, string>      # <Display名, 资源名> 模板覆写映射
+```
+
+关键方法：
+- `GetNode(int nodeId)` — switch 匹配 Entry/Any/Exit，否则线性搜索 Clips/Subs/BlendTrees
+- `GetClipNode(int nodeId)` — 在 Clips → Subs（递归）→ BlendTrees 中查找
+- `GetAllClipNodes()` — 收集本层所有 ClipNode（含子状态机内部）
+- `GetTransition(fromId, toId, subMachineId)` — 根据来源/目标查找转换规则，支持子状态机
+- `Inject(LayerConfig source)` — 模板注入，DeepCopy 所有节点和转换，应用 Overrides 映射
+- `Inject(ControllerSubNode source)` — 将子状态机展开为层数据
+
+### 9.4 ControllerTransition 状态转换
+
+```csharp
+public class ControllerTransition
+{
+    public int FromID;                              // 源节点 ID
+    public int ToID;                                // 目标节点 ID
+    public bool HasExitTime;                        // 是否有退出时间
+    public float ExitTime;                          // 退出时间比例 [0,1]
+    public float Duration;                          // 转换混合时长
+    public List<XTimelineConditionGroup> Groups;    // 条件组（OR 关系）
+
+    // 运行时缓存（NonSerialized）
+    [NonSerialized] public ControllerNode m_From;
+    [NonSerialized] public ControllerNode m_To;
+    [NonSerialized] public bool m_ValidHasExitTime;
+    [NonSerialized] public float m_ValidExitTime;
+    [NonSerialized] public float m_ValidDuration;
+}
+```
+
+条件判定逻辑：`Groups` 内为 OR 关系，每个 `XTimelineConditionGroup` 内的条件为 AND 关系。
+
+### 9.5 模板/覆写系统
+
+通过 `ControllerType` 枚举实现多级复用：
+
+| ControllerType | 说明 |
+|---------------|------|
+| `Default` | 普通控制器 |
+| `TemplateBoard` | 仅导出 Board 条件参数板 |
+| `TemplateLayer` | 层级模板，其他控制器的 Layer 可引用此模板 |
+| `TemplateSubNode` | 子状态机模板 |
+| `Override` | 覆写模式，通过 `OverrideLayer` / `OverrideSub` 进行资源替换 |
+
+覆写流程：
+1. 模板 Controller 定义层的节点拓扑和转换规则
+2. Override Controller 通过 `Overrides` 字典（`<DisplayName, AssetName>`）替换 ClipNode 关联的资源
+3. 运行时通过 `LayerConfig.Inject()` 将模板数据 DeepCopy 后应用覆写
+
+### 9.6 混合树（BlendTree）
+
+`ControllerBlendTreeNode` 持有一个 `BlendTree Root`，树节点结构递归定义：
+
+```csharp
+public class BlendTree
+{
+    public List<BlendTree> Children;    // 子节点列表
+    public string Name;                 // 混合节点名称
+    public string Asset;                // 关联资源
+    public float Threshold;             // 1D 混合阈值
+    public Vector2 TreePosition;        // 2D 混合坐标
+    public float TimeScale;             // 时间缩放
+    public bool Mirror;                 // 是否镜像
+}
+```
+
+### 9.7 编辑器窗口
+
+`XTimelineControllerWindow`（`XTimeline.Unity.Editor`）提供可视化状态机编辑：
+- 支持 `ControlState`：BaseState / BlendTree / SubMachine 三种视图切换
+- `ViewFlags`：Route / Follow / Debug 功能开关
+- 集成 `XControllerUndoSystem` 撤销系统
+- 通过 ECS `ArchetypeQuery` 缓存运行时 Mask
+- `ScriptedImporter` 为 `.xcontroller` 文件提供 AnimatorController 图标和 TextAsset 导入
+
+---
+
+## 10. AI 行为树系统
+
+AI 系统实现了基于**节点图（Node Graph）**的 AI 行为配置，采用可视化节点编辑器编辑、JSON 序列化存储。
+
+### 10.1 核心数据模型
+
+#### AINode（抽象基类）
+
+```csharp
+public abstract class AINode
+{
+    public int Id;                                  // 节点 ID（在图内唯一）
+    public List<AIConnection> InConnections;         // 入端口连接列表
+    public List<AIConnection> OutConnections;        // 出端口连接列表
+    public virtual int MaxInConnections => -1;       // 最大入连接数（-1 无限）
+    public virtual int MaxOutConnections => -1;      // 最大出连接数
+}
+```
+
+具体节点分为多个大类：
+- **入口类**：`NStarter`（行为树入口）、`NEmpty`（空节点/路由）
+- **对象获取**：`NObjectSelf`、`NObjectPlayer`、`NObjectTarget`、`NObjectById` 等
+- **属性查询**：`NCharacterHP`、`NCharacterState`、`NCharacterDistance` 等
+- **运算符**：`NFloatAdd`、`NFloatLess`、`NIntGreater`、`NBoolAnd` 等
+- **控制流**：`NIfElse`、`NSequence`、`NSelector`、`NParallel`、`NRepeat` 等
+- **任务执行**：`NTask`、`NMethod`（自定义方法调用）
+
+#### AIConnection
+
+```csharp
+public class AIConnection
+{
+    public int FromID;          // 源节点 ID
+    public int ToID;            // 目标节点 ID
+    public int SourceIndex;     // 源端口索引
+    public int TargetIndex;     // 目标端口索引
+    public AINode SourceNode;   // 运行时引用（非序列化）
+    public AINode TargetNode;   // 运行时引用（非序列化）
+}
+```
+
+#### AIConfig（序列化容器）
+
+`AIConfig` 采用**按类型平铺**的序列化策略，每种节点类型一个 `List<T>` 字段（80+ 列表）：
+
+```csharp
+public class AIConfig
+{
+    public AIThreadType Priority;
+    public List<NStarter> Starters;
+    public List<NEmpty> Empties;
+    public List<NObjectSelf> ObjectSelfs;
+    public List<NCharacterHP> CharacterHPs;
+    public List<NFloatAdd> FloatAdds;
+    // ... 80+ 具体类型列表
+    public List<AIConnection> Connections;
+    public List<AIGroup> Groups;
+}
+```
+
+#### AIGroup
+
+```csharp
+public class AIGroup
+{
+    public string Name;     // 分组名称
+    public Rect Rect;       // 编辑器中的矩形区域
+}
+```
+
+### 10.2 序列化层
+
+`AIJsonSerializer` 基于 `System.Text.Json` 提供 4 种预配置选项：
+
+| 变体 | 格式化 | 字段序列化 | 用途 |
+|------|--------|-----------|------|
+| `kSerializeFileOptions` | ✅ 缩进 | ✅ 含字段 | 导出 `.ai` JSON 文件 |
+| `kSerializeDataOptions` | ❌ 紧凑 | ✅ 含字段 | ScriptableObject 内部序列化 |
+| `kDeserializeFileOptions` | ✅ | ✅ | 读取 `.ai` 文件 |
+| `kDeserializeDataOptions` | ❌ | ✅ | 反序列化 ScriptableObject 数据 |
+
+### 10.3 编辑器（AIGraph + AIEditor）
+
+`AIGraph`（`ScriptableObject`，`#if UNITY_EDITOR`）是编辑时数据载体：
+- `List<AINode> Nodes` — 所有节点
+- `List<AIConnection> Connections` — 所有连接
+- `List<AIGroup> Groups` — 视觉分组
+- 实现 `ISerializationCallbackReceiver`，在 `OnBeforeSerialize/OnAfterDeserialize` 中通过 `AIJsonSerializer` 序列化
+
+关键操作：
+- `GetNewNodeID()` — O(n²) 遍历找可用 ID（从 0 开始递增直到不冲突）
+- `FindNode(int)` / `FindConnection(...)` — O(n) 线性搜索
+- `Duplicate()` — 复制选中节点及关联连接
+- `CleanDirtyData()` — 清理无效连接（注意：存在正向遍历 RemoveAt 的 bug）
+- `Save()` — 先保存 Graph 序列化数据，再导出 AIConfig JSON
+
+`AIEditor`（`EditorWindow`）提供可视化节点图编辑：
+- 画布缩放（`ZoomAreaLayout`，0.15x~5x）
+- 节点拖拽和连线
+- 分组管理（画布上矩形框选节点）
+- 多面板布局（工具栏、画布、侧边面板、预览）
+- 集成 `CustomEnumUtility`、`CustomMethodUtility`、`CustomVariableUtility` 等数据刷新
+- `Update()` 中每帧 `Repaint()`（编辑器实时刷新）
+
+### 10.4 工具链
+
+- **导入器**：与 Controller 类似，基于 `ScriptedImporter` 处理 `.ai` 文件
+- **预览**：`AIUtility`（`#if UNITY_EDITOR`）中的预览方法
+- **清理工具**：`CleanInValidNodes()` — 移除无连接的孤立节点
+
+---
+
+## 11. 蓝图系统（Blueprint）
+
+蓝图系统是一个简化的**状态机**，用于管理 Controller 的高层编排。
+
+```
+BlueprintConfig
+├── Boards: List<XTimelineCondition>           # 状态条件
+├── Controllers: List<BlueprintControllerName> # Controller 列表
+├── Entry / Any / Exit                         # 特殊节点
+├── Clips: List<BlueprintClipNode>             # 状态节点
+└── Transitions: List<BlueprintTransition>     # 状态转换
+
+BlueprintNode (base)
+├── BlueprintEntryNode    # 入口
+├── BlueprintAnyNode      # 任意状态
+├── BlueprintExitNode     # 退出
+└── BlueprintClipNode     # 状态片段
+```
+
+---
+
+## 12. 样条曲线（Spline）
+
+`XTimeline.Runtime.Spline` 命名空间提供了 **Bezier 样条曲线** 的实现，使用 `System.Numerics.Vector3`（非 Unity 的 Vector3）。
+
+### 核心类型
+
+| 类型 | 说明 |
+|------|------|
+| `XBezierCurve` | 三次贝塞尔曲线（4 个控制点 P0-P3） |
+| `XBezierKnot` | 贝塞尔节点（Position + TangentIn/Out + Rotation） |
+| `XDistanceToInterpolation` | 距离到插值比的映射 |
+
+支持从线性/二次/三次曲线构造，支持曲线反转和切线计算。
+
+---
+
+## 13. 扩展指南
+
+### 13.1 添加新的 Clip 类型（完整 Checklist）
+
+扩展一种新片段需要修改 4 层代码，遗漏任何一层都会导致运行时或编辑器异常。
+
+#### Step 1 — 定义 Clip 数据类（`XTimeline.Unity.Runtime`）
+
+```csharp
+[MenuName("我的片段")]
+public class MyClip : ClipAsset
+{
+    public string SomeProperty { get; set; }
+    public float SomeValue { get; set; }
+}
+```
+
+#### Step 2 — 定义 Track 类型（`XTimeline.Unity.Runtime`）
+
+```csharp
+[MenuName("我的轨道")]
+[RelationEntity((int)SkillEntityType.Character)]  // 关联实体类型
+[TrackType(TrackType.Track, "MyIcon")]             // 轨道类型 & 图标
+[TrackColor(255, 128, 0)]                          // 橙色
+[TrackClipType(typeof(MyClip))]                    // 绑定 Clip 类型
+[TrackLimit(1)]                                    // 可选：限制每个实体最多 N 条该轨道
+public class MyTrack : XTimelineTrackAsset<MyClip> { }
+```
+
+> **属性说明**：
+> - `[MenuName]` → 编辑器右键菜单显示名称
+> - `[RelationEntity]` → 该轨道可以挂载在哪种实体类型下
+> - `[TrackType]` → `TrackType.Track`（普通）、`TrackType.Entity`（实体）、`TrackType.Escape`（系统内部不可手动添加）
+> - `[TrackColor]` → 轨道在时间轴中的颜色（R, G, B 取值 0-255）
+> - `[TrackClipType]` → 告诉编辑器该轨道接受哪种 Clip 类型
+> - `[TrackLimit]` → 可选，限制每个实体下该类型轨道的数量上限
+
+#### Step 3 — 在 Entity 中注册轨道列表（`XTimeline.Unity.Runtime`）
+
+```csharp
+public class SkillTrackEntity : XTimelineTrackEntityBase
+{
+    // 添加新轨道列表
+    public List<MyTrack> MyTracks { get; set; } = new List<MyTrack>();
+
+    public override void BindTracks()
+    {
+        // ... 现有 Bind 调用
+        Bind<MyTrack>(MyTracks);  // 注册到 Dictionary<Type, IList> 缓存
+    }
+}
+```
+
+> **关键**：`Bind<T>(list)` 将类型 `T` 映射到 `IList`，编辑器通过此映射实现自动发现和管理。
+
+#### Step 4 — 在 Config 中缓存 RuntimeClip（`XTimeline.Unity.Runtime`）
+
+```csharp
+protected override void CacheRuntimeClips()
+{
+    foreach (var entity in Entities)
+    {
+        // ... 现有缓存调用
+        CacheRuntimeClip<MyTrack, MyClip>(entity, entity.MyTracks);
+    }
+}
+```
+
+> **作用**：为每个 Clip 分配 `_runtimeUniqueId`，注册到 `Dictionary<long, ClipAsset> _runtimeClipCaches`，运行时通过 `config.GetClip(runtimeId)` 高效查找。
+
+#### Step 5（可选）— 自定义 ClipEditor
+
+如果新 Clip 需要自定义编辑器外观或 Inspector：
+
+```csharp
+[CustomTimelineEditor(typeof(MyClip))]
+public class MyClipEditor : ClipEditor
+{
+    // 自定义 Clip 在时间轴中的绘制、Inspector 等
+}
+```
+
+编辑器通过 `CustomTimelineEditorCache.GetClipEditor(clip)` 自动查找，沿继承链向上查找直到找到匹配的 Editor 或返回默认实例。
+
+### 13.2 添加新的业务子系统
+
+如果需要新增一套完整的时间轴业务（如新增 "Cutscene" 子系统）：
+
+1. **定义 Config**：继承 `XTimelineConfigBase`，覆写 `BindEntities()`、`CacheRuntimeClips()`、`CreateEntity()`
+2. **定义 Entity**：继承 `XTimelineTrackEntityBase`，覆写 `BindTracks()`
+3. **定义文件扩展名**：在 `XTimelineConst` 中添加新扩展（如 `.cutscene`）
+4. **创建 ScriptedImporter**：继承 `ScriptedImporter`，处理新扩展名的导入
+5. **创建编辑器窗口**：继承 `XTimelineWindowBase`，覆写生命周期虚方法
+
+### 13.3 自定义 Inspector
+
+继承 `XTimelineInspectorBase` 并实现 `OnInspectorGUI()`，通过编辑器的 `TypeCache` 反射机制自动关联到对应的数据类型。编辑器在 `CustomTimelineEditorCache.SubClassCache<T>` 中按 `[CustomTimelineEditor(typeof(TargetType))]` 匹配。
+
+### 13.4 自定义 Action
+
+Action 系统基于 `ActionManager` 的反射发现机制，通过 `TypeCache.GetTypesDerivedFrom<T>()` 自动实例化所有 Action 子类。
+
+```csharp
+[MenuEntry("我的操作", MenuPriority.TimelineActionSection.xxx)]
+[Shortcut("XTimeline/MyAction", KeyCode.M, ShortcutModifiers.Shift)]  // 可选快捷键
+class MyAction : TimelineAction
+{
+    public override ActionValidity Validate(WindowState state, ActionContext context)
+    {
+        // NotApplicable → 不显示 | Invalid → 灰色 | Valid → 可执行
+        return ActionValidity.Valid;
+    }
+
+    public override bool Execute(WindowState state, ActionContext context)
+    {
+        // 执行操作
+        return true;
+    }
+}
+```
+
+Action 类型体系：
+| 基类 | 作用域 | 说明 |
+|------|--------|------|
+| `TimelineAction` | 全局时间轴 | 右键菜单 / 快捷键触发 |
+| `ClipAction` | 选中的 Clip | 对 Clip 的操作 |
+| `TrackAction` | 选中的 Track | 对轨道的操作 |
+| `MarkerAction` | Marker | 对标记的操作 |
+
+### 13.5 自定义编辑器窗口
+
+继承 `XTimelineWindowBase` 并覆写虚方法：
+
+| 虚方法 | 时机 | 用途 |
+|--------|------|------|
+| `OnWindowBorn()` | 窗口创建 | 早期初始化 |
+| `OnPreInitializeWindow()` | 窗口初始化前 | 配置设置 |
+| `OnPostInitializeWindow()` | 窗口初始化后 | 后续设置 |
+| `OnPreInitialize()` | Timeline 初始化前 | 数据准备 |
+| `OnInitialize()` | Timeline 初始化中 | 核心初始化 |
+| `OnInitializeFinished()` | Timeline 初始化完成 | 完成处理 |
+| `BindExtension()` | 绑定扩展 GUI | 注册扩展面板 |
+| `ExistConfig()` | 检查配置是否存在 | 文件存在性检查 |
+| `Load()` | 加载配置 | JSON 反序列化 |
+
+### 13.6 添加新的 AI 节点类型
+
+1. 定义新节点类继承 `AINode`
+2. 在 `AIConfig` 中添加对应的 `List<T>` 字段
+3. 在 `AIUtility.ParseToConfig()` 和 `AIUtility.ParseToGraph()` 中添加转换逻辑
+4. 在 `AINode.Editor.cs` 中实现 Editor partial（GUI 绘制、端口定义）
+
+### 13.7 添加新的 Controller 条件类型
+
+1. 在 `XTimelineConditionType` 枚举中添加新类型
+2. 在 `XTimelineValueType` 中添加对应值类型（如果需要新的）
+3. 在运行时条件判定逻辑中添加对应的比较实现
+
+---
+
+## 14. 典型工作流
+
+### 14.1 技能编辑工作流
+
+```
+1. 打开技能编辑器窗口（SkillWindow 继承 XTimelineWindowBase）
+2. 创建/加载 SkillConfig（.clip 文件，JSON 反序列化）
+3. 添加实体轨道（SkillTrackEntity）
+   - Character 实体（SkillEntityType.Character）→ 主角
+   - Effect 实体 → 特效挂载
+   - Attack 实体 → 攻击判定
+4. 在实体轨道下添加子轨道
+   - Animation 轨道 → 添加动画 Clip（XTimelineAnimation）
+   - Attack 轨道 → 添加攻击 Clip（XTimelineAttack）
+   - Effect 轨道 → 添加特效 Clip（XTimelineEffect）
+   - Camera 轨道 → 添加相机 Clip（XTimelineCamera）
+   - Control 轨道 → 添加控制 Clip（用于引用子配置）
+5. 调整 Clip 时间位置和长度（拖拽操作）
+6. 添加 Marker 事件（XTimelineMarkerNode）
+7. 配置条件（Condition）→ 运行时按条件启用/禁用轨道
+8. 预览播放（WindowState.SetPlaying → Play/Pause）
+9. 保存配置（JSON 序列化写文件）
+```
+
+数据流向：
+```
+编辑时：SkillWindow → WindowState → SkillConfig → JSON 文件
+运行时：JSON 文件 → ConfigBridge.Get<SkillConfig>() → Initialize<SkillConfig>()
+        → CacheRuntimeClips()（分配 RuntimeId）→ GetClip(runtimeId)
+```
+
+### 14.2 控制器编辑工作流
+
+```
+1. 打开控制器编辑器窗口（XTimelineControllerWindow）
+2. 创建/加载 XTimelineControllerConfig（.xcontroller 文件）
+3. 在 Board 中定义条件变量（Float/Int/Bool/Trigger）
+   → 条件变量全局共享，供所有层的所有 Transition 引用
+4. 添加层（Layer）
+   → 每层有 Name、MaskBlendingType（Override/Additive）、骨骼遮罩
+5. 创建节点
+   → Entry（自动创建，不可删除）
+   → Any（自动创建）
+   → Exit（自动创建）
+   → ClipNode：右键创建，关联 SkillConfig 资源
+   → SubMachine：创建子状态机，内部有自己的 Entry/Any/Exit/Clips/Transitions
+   → BlendTree：创建混合树，配置 Threshold/Position
+6. 连接状态转换（Transition），配置转换条件
+   → 拖线连接两个节点
+   → 设置 HasExitTime / ExitTime / Duration
+   → 添加 ConditionGroup（OR 关系），每组内添加 Condition（AND 关系）
+   → 条件引用 Board 中的变量
+7. 模板功能
+   → ControllerType.TemplateLayer：将某个 Controller 的 Layer 作为模板
+   → 其他 Controller 的 Layer 设置 Template 指向模板资源
+   → Overrides 字典映射 <DisplayName, 新资源名> 实现节点资源替换
+   → 运行时通过 LayerConfig.Inject() 完成模板展开 + 覆写
+8. 保存配置（JSON 序列化 → .xcontroller 文件）
+```
+
+### 14.3 AI 编辑工作流
+
+```
+1. 打开 AI 编辑器窗口（AIEditor）
+2. 创建/加载 AIGraph（ScriptableObject + .ai JSON）
+   → AIGraph.Deserialize() 读取 JSON → AIJsonSerializer → AIConfig → AIUtility.ParseToGraph()
+3. 添加节点
+   → 右键画布 → 选择节点类型 → AIGraph.AddNode()
+   → 节点 ID 由 GetNewNodeID() 分配（从 0 开始找空闲 ID）
+4. 连线
+   → 从源端口拖拽到目标端口
+   → AIGraph.ConnectNodes() → 创建 AIConnection 添加到 Connections 列表
+   → 端口检查：IsNewConnectionAllowed() → MaxIn/MaxOutConnections 限制
+5. 配置节点参数
+   → 侧边面板 Inspector 编辑当前选中节点属性
+   → 节点分组（AIGroup）：框选一组节点分组管理
+6. 预览/调试
+   → AIEditor.Preview.cs 提供运行时预览
+   → 需在 Play Mode 下观察 AI 行为
+7. 保存
+   → AIGraph.Save() → AIUtility.ParseToConfig() → AIJsonSerializer.Serialize() → File.WriteAllText()
+   → 同时通过 ISerializationCallbackReceiver 保存到 ScriptableObject
+8. 清理
+   → CleanDirtyData()：移除指向不存在节点的连接
+   → CleanInValidNodes()：移除无连接的孤立节点
+```
+
+### 14.4 运行时使用
+
+```csharp
+// === 初始化阶段 ===
+
+// 1. 初始化桥接层
+XTimelineBridge.Bind(audioImpl);         // 绑定音频实现
+// XTimelineBridge.InitializeInEditor()  // 编辑器下自动由静态构造调用
+
+// 2. 加载配置
+SkillConfig config = ConfigBridge.Get<SkillConfig>("skill_attack_001");
+// 内部：Config.Get<T>() → ResourceBridge.LoadAsset<T>() → 缓存到 Dictionary<string, XTimelineConfigBase>
+
+// 3. 初始化运行时数据（分配 RuntimeId、建立父子关系）
+config.Initialize<SkillConfig>();
+// 内部：CacheRuntimeClips() 遍历所有 Entity → Track → Clip，分配递增 _runtimeUniqueId
+
+// === 运行阶段 ===
+
+// 4. 通过 RuntimeId 查找 Clip/Marker
+ClipAsset clip = config.GetClip(runtimeId);               // Dictionary<long, ClipAsset> 查找
+XTimelineMarkerNode marker = config.GetMarker(runtimeId);  // Dictionary<long, XTimelineMarkerNode> 查找
+
+// 5. 设置时间偏移（全局偏移所有 Clip/Marker 的 Start）
+config.SetOffsetTime(offsetTime);
+
+// === 释放阶段 ===
+
+// 6. 释放资源
+config.Dispose();            // 清空 RuntimeClip 和 Marker 缓存
+XTimelineBridge.Dispose();   // 清空 Config 缓存，重置 Initialized 标志
+```
+
+### 14.5 控制器运行时流程
+
+```csharp
+// 1. 加载 Controller 配置
+XTimelineControllerConfig controller = LoadControllerConfig("controller_hero");
+
+// 2. 模板展开（如果使用了模板）
+foreach (LayerConfig layer in controller.Layers)
+{
+    if (!string.IsNullOrEmpty(layer.Template))
+    {
+        LayerConfig templateLayer = LoadTemplateLayer(layer.Template);
+        layer.Inject(templateLayer);  // DeepCopy + Override
+    }
+}
+
+// 3. 运行时状态管理
+// → 从 Entry 出发，查找第一个有效 Transition
+// → 条件判定：遍历 Transition.Groups（OR）→ 每组内 Conditions（AND）
+// → 匹配后切换到目标节点，加载对应 SkillConfig
+
+// 4. 查找节点
+ControllerNode node = controller.GetNode(layerIndex, subMachineId, nodeId);
+```
+
+---
+
+## 15. 类图与关系总览
+
+```
+                    ┌──────────────────────┐
+                    │  XTimelineConfigBase  │
+                    │  (配置顶层容器)       │
+                    └──────────┬───────────┘
+                               │ contains
+                    ┌──────────▼───────────┐
+                    │  XTimelineTrack      │
+                    │  EntityBase          │
+                    │  (实体轨道)          │
+                    └──────────┬───────────┘
+                               │ contains N
+                    ┌──────────▼───────────┐
+                    │  XTimelineTrack      │
+                    │  Asset<T>            │
+                    │  (泛型子轨道)        │
+                    └──────────┬───────────┘
+                               │ contains N
+                    ┌──────────▼───────────┐
+                    │  ClipAsset (T)       │
+                    │  (片段数据)          │
+                    └─────────────────────┘
+
+    ┌─────────────────────┐     ┌──────────────────┐
+    │  XTimelineMarker    │     │  XTimelineMarker │
+    │  (全局 Marker 轨道) │     │  Node            │
+    │  on ConfigBase      │     │  (Marker 节点)   │
+    └─────────────────────┘     └──────────────────┘
+
+    ┌─────────────────────┐     ┌──────────────────┐
+    │  XTimelineCondition │     │  ConditionGroup  │
+    │  (单条件)           │ ←── │  (条件组)        │
+    └─────────────────────┘     └──────────────────┘
+
+    ┌─────────────────────┐     ┌──────────────────┐
+    │  XTimelineBridge    │ ──→ │  IConfig/IAudio  │
+    │  (桥接管理器)       │     │  ILogger/IJson   │
+    └─────────────────────┘     └──────────────────┘
+
+编辑器:
+    ┌─────────────────────────┐
+    │  XTimelineWindowBase    │
+    │  (编辑器窗口基类)       │
+    ├── WindowState           │
+    ├── ViewControl           │
+    ├── Selection             │
+    ├── TimeArea              │
+    └── Manipulators          │
+    └─────────────────────────┘
+         │ uses
+    ┌────▼────────────────────┐
+    │  ActionManager          │
+    │  (Action 注册/分发)     │
+    ├── TimelineAction[]      │
+    ├── ClipAction[]          │
+    ├── TrackAction[]         │
+    └── MarkerAction[]        │
+    └─────────────────────────┘
+```
+
+---
+
+## 附录 A：关键设计决策
+
+| # | 决策 | 原因 | 权衡 |
+|---|------|------|------|
+| 1 | Runtime 不依赖 Unity Engine（`noEngineReferences: true`） | 支持服务端验证/独立工具链/跨平台；使用 `System.Numerics.Vector2` 替代 `UnityEngine.Vector2` | 需要 Bridge 层桥接所有引擎功能 |
+| 2 | 使用 `BaseObject` 代替 `UnityEngine.Object` | 提供相同的 ID/相等性语义，但不依赖 Unity 生命周期管理；支持 `implicit operator bool` | 静态递增 `kBaseId` 有线程安全和溢出风险（见缺陷报告） |
+| 3 | 泛型轨道 `XTimelineTrackAsset<T>` | 强类型的 Clip 列表，避免运行时类型转换和错误 | 需要维护双重列表（`Clips` + `_cachedClips`），增加同步复杂度 |
+| 4 | Attribute 驱动注册（`[MenuName]`/`[TrackType]`/`[TrackColor]`/`[TrackClipType]`） | 声明式定义轨道关系、颜色、菜单名，减少硬编码；编辑器通过 `TypeCache` 反射自动发现 | 编译期无法校验 Attribute 参数正确性 |
+| 5 | Bridge 模式（`XTimelineBridge`） | 运行时解耦，编辑器和游戏运行时可绑定不同实现（Config/Json/Logger/Audio） | 桥接层本身为静态类，全局状态，需注意初始化顺序 |
+| 6 | partial class 三区域分区 | 将 Runtime Data / Runtime Function / Editor 逻辑分散到不同 partial 区域，清晰分层 | 单个类跨多个文件，增加导航成本 |
+| 7 | 配置保存时排序 Clip（`SortClips`/`SortUsedClips`） | 确保按时间顺序执行，避免创建顺序导致的 Bug | 排序缓存（`_cacheSorted`）无失效机制（见缺陷报告） |
+| 8 | RuntimeId 系统（递增 `_runtimeUniqueId`） | 为每个 Clip/Marker 分配递增 ID，支持运行时 O(1) Dictionary 查找 | ID 为 `int` 但 Dictionary key 为 `long`，类型不一致 |
+| 9 | AI 按类型平铺序列化（`AIConfig` 80+ 列表） | 避免多态 JSON 序列化的复杂性，`System.Text.Json` 原生支持 | 每新增节点类型需在 AIConfig/ParseToConfig/ParseToGraph 三处修改 |
+| 10 | Controller 模板/覆写系统 | 复用状态机拓扑结构，仅替换节点关联资源，减少配置工作量 | 模板展开使用 DeepCopy，运行时内存消耗增加 |
+| 11 | AI 节点 ID 从 0 递增查找空闲（`GetNewNodeID`） | 简单直观，保证 ID 不重复 | O(n²) 复杂度，节点数多时性能差 |
+| 12 | 编辑器 Action 系统基于反射自动发现 | 零配置注册，新增 Action 只需继承基类 + 添加 Attribute | 启动时 Activator.CreateInstance 开销，无法编译期检查 |
+| 13 | `DiscreteTime` 高精度时间（Int64 + 1e-12 tick） | 消除浮点精度问题，在帧边界判定上比 double 更可靠 | 转换频繁时有一定计算开销 |
+| 14 | `Dictionary<Type, IList>` 用于 Entity 轨道缓存 | 灵活支持任意数量的轨道类型，无需修改基类 | IList 非泛型接口，取出后需要类型转换 |
+
+## 附录 B：命名空间映射
+
+| 命名空间 | 所在程序集 | 说明 |
+|----------|------------|------|
+| `XTimeline.Runtime` | XTimeline.Runtime | 核心数据模型 |
+| `XTimeline.Runtime.Spline` | XTimeline.Runtime | 样条曲线 |
+| `XTimeline.Editor` | XTimeline.Editor | 核心编辑器框架 |
+| `XTimeline.Editor.Internal` | XTimeline.Editor | 编辑器内部工具 |
+| `XTimeline.Skill.Runtime` | XTimeline.Unity.Runtime | 技能数据 |
+| `StorySystem.Runtime` | XTimeline.Unity.Runtime | 剧情数据 |
+| `XController.Runtime` | XTimeline.Unity.Runtime | 控制器数据 |
+| `AISystem.Runtime` | XTimeline.Unity.Runtime | AI 数据 |
+| `Blueprint.Runtime` | XTimeline.Unity.Runtime | 蓝图数据 |
+
+---
+
+## 附录 C：设计缺陷与 Bug 报告
+
+以下列出通过代码审查发现的设计缺陷和潜在 Bug，按严重程度排序。
+
+### C.1 严重缺陷（Critical）
+
+#### C.1.1 `ControllerNode.GetHashCode()` 包含可变计算属性
+
+**文件**: `Assets/_Scripts/XTimeline/Runtime/Controller/Nodes/ControllerNode.cs`
+
+**问题**: `GetHashCode()` 中包含 `Center`、`Left`、`Right`、`IsEntry`、`IsAny`、`IsExit` 等由 `Position` 和 `ID` 计算得出的属性。当 `Position` 在编辑器中拖拽变化时，哈希值随之改变，违反 `GetHashCode` 的不可变契约。如果 `ControllerNode` 被用作 `Dictionary` 的 Key 或存入 `HashSet`，拖拽节点后将无法再找到该对象。
+
+**修改建议**:
+```csharp
+// 仅使用不可变的标识字段
+public override int GetHashCode()
+{
+    return ID.GetHashCode();
+    // 如果需要更多区分度，可加入 GUID
+    // return HashUtility.CombineHash(ID.GetHashCode(), GUID?.GetHashCode() ?? 0);
+}
+```
+
+#### C.1.2 `AIGraph.CleanDirtyData()` 正向遍历中 `RemoveAt` 导致跳过元素
+
+**文件**: `Assets/_Scripts/XTimeline/Runtime/AI/AIEditor/AIGraph.cs`，第 490-499 行
+
+**问题**:
+```csharp
+for (int i = 0; i < Connections.Count; i++)
+{
+    // ...
+    if (!ExistNode(fromNodeId) || !ExistNode(toNodeId))
+    {
+        Connections.RemoveAt(i);  // i 不递减，下一个元素被跳过
+    }
+}
+```
+当连续两个无效连接相邻时，第二个会被跳过。
+
+**修改建议**:
+```csharp
+for (int i = Connections.Count - 1; i >= 0; i--)
+{
+    AIConnection connection = Connections[i];
+    if (!ExistNode(connection.FromID) || !ExistNode(connection.ToID))
+    {
+        Connections.RemoveAt(i);
+    }
+}
+```
+
+#### C.1.3 `Config.Dispose()` 后仍可调用 `Get<T>()` 导致 NullReferenceException
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/Interfaces/Config.cs`，第 49-53 行
+
+**问题**: `Dispose()` 将 `m_Configs` 设为 `null`，但 `Get<T>()`、`Reload<T>()`、`Exist()` 不检查 `m_Configs` 是否为 null。`ConfigBridge` 是公共 API，外部调用者在 `XTimelineBridge.Dispose()` 后可能仍调用 `ConfigBridge.Get<T>()`。
+
+**修改建议**:
+```csharp
+public void Dispose()
+{
+    m_Configs?.Clear();
+    m_Configs = null;
+}
+
+public T Get<T>(string assetName) where T : XTimelineConfigBase
+{
+    if (m_Configs == null)
+        throw new ObjectDisposedException(nameof(Config));
+    // ... 原有逻辑
+}
+```
+或在 `ConfigBridge` 中添加 null 检查。
+
+#### C.1.4 `TrackAsset._cacheSorted` 无失效机制
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/Tracks/TrackAsset.cs`，第 203-215 行
+
+**问题**: `SortClips()` 在首次排序后将 `_cacheSorted` 设为 `true`，之后所有调用直接跳过排序。但 `AddClip()`、`RemoveClip()` 不会将 `_cacheSorted` 重置为 `false`。在编辑器中添加/移动/删除 Clip 后再调用 `SortClips()`，数据不会重新排序。
+
+**修改建议**:
+在 `XTimelineTrackAsset<T>.AddClip()` 和 `RemoveClip()` 中重置标志：
+```csharp
+public override void AddClip(ClipAsset clip)
+{
+    // ... 原有逻辑
+    _cacheSorted = false;  // 新增
+}
+
+public override void RemoveClip(ClipAsset clip)
+{
+    // ... 原有逻辑
+    _cacheSorted = false;  // 新增
+}
+```
+注意：`_cacheSorted` 在基类 `TrackAsset` 中是 `private`，需改为 `protected` 或提供 `InvalidateSortCache()` 方法。
+
+### C.2 中等缺陷（Medium）
+
+#### C.2.1 `BaseObject.kBaseId` 静态计数器的线程安全和溢出问题
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/Data/BaseObject.cs`，第 8-17 行
+
+**问题**:
+1. `kBaseId` 从 `int.MinValue` 开始递增，在多线程场景下 `kBaseId++` 非原子操作，可能导致 ID 重复
+2. 无溢出检查，虽然从 `int.MinValue` 到 `int.MaxValue` 有 ~42 亿个 ID，但无保护
+3. 无重置机制，`XTimelineBridge.Dispose()` 不会重置 `kBaseId`
+
+**修改建议**:
+```csharp
+private static int kBaseId = int.MinValue;
+
+public BaseObject()
+{
+    m_InstanceID = System.Threading.Interlocked.Increment(ref kBaseId);
+}
+```
+如果确定单线程使用，至少添加注释说明约束。
+
+#### C.2.2 `XTimelineTrackAsset<T>` 双列表同步风险
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/Tracks/XTimelineTrackAsset.cs`
+
+**问题**: 维护两个列表 `Clips`（`List<T>`，序列化源）和 `_cachedClips`（`List<ClipAsset>`，编辑器用）。`GetClips()` 在首次调用时从 `Clips` 复制到 `_cachedClips`，之后永不刷新。如果外部直接修改 `Clips`（如反序列化后替换列表内容），`_cachedClips` 将永远过时。
+
+**修改建议**:
+```csharp
+// 方案 A：每次重建（简单但有性能开销）
+public override List<ClipAsset> GetClips()
+{
+    _cachedClips ??= new List<ClipAsset>();
+    _cachedClips.Clear();
+    for (int i = 0; i < Clips.Count; i++)
+        _cachedClips.Add(Clips[i]);
+    return _cachedClips;
+}
+
+// 方案 B：添加脏标记（推荐）
+private bool _cachedClipsDirty = true;
+
+public override void AddClip(ClipAsset clip) { /* ... */ _cachedClipsDirty = true; }
+public override void RemoveClip(ClipAsset clip) { /* ... */ _cachedClipsDirty = true; }
+
+public override List<ClipAsset> GetClips()
+{
+    if (_cachedClips == null || _cachedClipsDirty)
+    {
+        _cachedClips ??= new List<ClipAsset>();
+        _cachedClips.Clear();
+        for (int i = 0; i < Clips.Count; i++)
+            _cachedClips.Add(Clips[i]);
+        _cachedClipsDirty = false;
+    }
+    return _cachedClips;
+}
+```
+
+#### C.2.3 `XTimelineConfigBase._runtimeClipCaches` 键类型不匹配
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/XTimelineConfigBase.cs`，第 39 行 vs 第 44 行
+
+**问题**: `_runtimeClipCaches` 声明为 `Dictionary<long, ClipAsset>`，但 `_runtimeUniqueId` 是 `int`。`GetClip(int runtimeId)` 传入 `int`，在 `TryGetValue` 时隐式转换为 `long`。虽然功能正确，但 key 永远只使用 `long` 范围的 `int` 子集，浪费内存（`long` key 比 `int` key 占用更多空间）。
+
+**修改建议**:
+统一使用 `int` 或 `long`：
+```csharp
+private Dictionary<int, ClipAsset> _runtimeClipCaches = new Dictionary<int, ClipAsset>();
+private Dictionary<int, XTimelineMarkerNode> _runtimeMarkCaches = new Dictionary<int, XTimelineMarkerNode>();
+```
+
+#### C.2.4 `ObjectUtility.GetAddress()` 内存泄漏
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/Utilities/ObjectUtility.cs`，第 8-13 行
+
+**问题**: `GCHandle.Alloc(target, GCHandleType.Pinned)` 分配了固定句柄但从未调用 `h.Free()`。每次调用都会固定一个对象防止 GC 移动，累积调用将导致内存碎片化和泄漏。
+
+**修改建议**:
+```csharp
+public static IntPtr GetAddress(BaseObject target)
+{
+    GCHandle h = GCHandle.Alloc(target, GCHandleType.Pinned);
+    try
+    {
+        return h.AddrOfPinnedObject();
+    }
+    finally
+    {
+        h.Free();
+    }
+}
+```
+> **注意**：返回的 `IntPtr` 在 `Free()` 后指向的内存可能被 GC 移动，如果需要持久地址应保持 handle 存活并提供释放机制。考虑此方法的实际用途是否合理。
+
+#### C.2.5 `StringUtility` 静态 `StringBuilder` 非线程安全
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/Utilities/StringUtility.cs`
+
+**问题**: 全局共享的静态 `kBuilder` 在多处调用 `Clean → Append → GetString` 序列中，如果被并发调用（或嵌套调用）会导致数据污染。
+
+**修改建议**:
+如果确定单线程使用，添加注释说明。否则使用 `[ThreadStatic]` 或 `ThreadLocal<StringBuilder>`。
+
+### C.3 轻微缺陷（Minor）
+
+#### C.3.1 `XTimelineTrackEntityBase.GetSubTracks()` 每次调用分配新 List
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/Tracks/XTimelineTrackEntityBase.cs`，第 90-104 行
+
+**问题**: 每次调用 `GetSubTracks()` 创建新 `List<TrackAsset>` 并填充，如果在帧循环中频繁调用会造成 GC 压力。
+
+#### C.3.2 `LayerConfig.GetAllClipNodes()` 每次调用分配新 List
+
+**文件**: `Assets/_Scripts/XTimeline/Runtime/Controller/Layers/LayerConfig.cs`，第 347-362 行
+
+**问题**: 同上，每次调用分配新列表。如果在编辑器每帧 GUI 中调用会持续产生垃圾。
+
+#### C.3.3 `SkillConfig.RemoveEntity()` 返回值永远为 `false`
+
+**文件**: `Assets/_Scripts/XTimeline/Runtime/Skill/Configs/SkillConfig.cs`，第 145-157 行
+
+**问题**: 变量 `result` 初始化为 `false`，在 `RemoveAt` 分支中未设置为 `true`，方法永远返回 `false`。
+
+**修改建议**:
+```csharp
+if (string.CompareOrdinal(entity.DisplayName, displayName) == 0)
+{
+    Entities.RemoveAt(i);
+    result = true;  // 缺失
+}
+```
+
+#### C.3.4 `ClipAsset.SanitizeTimeValue()` 死代码
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/Clips/ClipAsset.cs`，第 145-152 行
+
+**问题**: `SanitizeTimeValue` 为 `private static` 方法，但整个代码库中从未被调用。
+
+**修改建议**: 删除或标记为 `internal` 并在 `Start`/`Duration` 的 setter 中调用。
+
+#### C.3.5 `AIGraph.GetNewNodeID()` O(n²) 复杂度
+
+**文件**: `Assets/_Scripts/XTimeline/Runtime/AI/AIEditor/AIGraph.cs`，第 237-245 行
+
+**问题**: `GetNewNodeID()` 从 0 开始递增，每个候选 ID 都调用 `IsValidNodeID(id)` 遍历整个 `Nodes` 列表。节点数 n 时最坏 O(n²)。
+
+**修改建议**: 维护一个 `int _nextNodeId` 字段，每次直接使用并递增，或使用 `HashSet<int>` 存储已用 ID。
+
+#### C.3.6 `Config.cs` 异常使用 `throw new Exception`
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/Interfaces/Config.cs`，第 14 行、第 33 行
+
+**问题**: 抛出基础 `Exception` 类型而非具体异常（如 `ArgumentNullException`），且错误消息包含乱码字符（编码问题：`"ÅäÖÃ²»ÄÜÎª¿Õ!"`）。
+
+**修改建议**:
+```csharp
+if (string.IsNullOrEmpty(assetName))
+    throw new ArgumentNullException(nameof(assetName), "Asset name cannot be null or empty");
+```
+
+#### C.3.7 `XTimelineTrackAsset<T>.RemoveClip()` 缺少 null 检查
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/Tracks/XTimelineTrackAsset.cs`，第 32-37 行
+
+**问题**: `RemoveClip` 直接调用 `_cachedClips.Remove(clip)`，但如果 `GetClips()` 从未被调用（`_cachedClips == null`），将抛出 `NullReferenceException`。
+
+**修改建议**:
+```csharp
+public override void RemoveClip(ClipAsset clip)
+{
+    T asset = clip as T;
+    Clips.Remove(asset);
+    _cachedClips?.Remove(clip);
+}
+```
+
+#### C.3.8 `DiscreteTime` 构造函数 `(int frame, double fps)` 语义错误
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/DiscreteTime.cs`，第 39-42 行
+
+**问题**: 
+```csharp
+public DiscreteTime(int frame, double fps)
+{
+    m_DiscreteTime = DoubleToDiscreteTime(frame * fps);
+}
+```
+`frame * fps` 得到的是"帧数 × 帧率"，数值上等于帧数的平方/秒，正确应为 `frame / fps`（将帧转换为秒）。
+
+**修改建议**:
+```csharp
+m_DiscreteTime = DoubleToDiscreteTime((double)frame / fps);
+```
+
+#### C.3.9 `XTimelineConfigBase.Sort()` 无 null 检查
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Runtime/XTimelineConfigBase.cs`（Editor partial）
+
+**问题**: `Sort()` 调用 `GetCaches()` 返回 `m_Caches`，如果 `m_Caches` 为 null（`BindEntities()` 未调用），后续循环将抛出 `NullReferenceException`。
+
+---
+
+## 附录 D：XTimeline.Runtime 代码优化与性能优化建议
+
+### D.1 内存分配优化（GC 压力）
+
+#### D.1.1 `XTimelineTrackEntityBase.GetSubTracks()` — 缓存结果
+
+**现状**: 每次调用 `new List<TrackAsset>()`，遍历 `GetCaches()` 填充。
+**优化**: 引入脏标记或缓存列表：
+
+```csharp
+private List<TrackAsset> _cachedSubTracks;
+private bool _subTracksDirty = true;
+
+public override List<TrackAsset> GetSubTracks()
+{
+    if (_cachedSubTracks == null || _subTracksDirty)
+    {
+        _cachedSubTracks ??= new List<TrackAsset>();
+        _cachedSubTracks.Clear();
+        using var enumerator = GetCaches().GetEnumerator();
+        while (enumerator.MoveNext())
+        {
+            IList list = enumerator.Current.Value;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i] is TrackAsset track)
+                    _cachedSubTracks.Add(track);
+            }
+        }
+        _subTracksDirty = false;
+    }
+    return _cachedSubTracks;
+}
+```
+**预估收益**: 编辑器每帧 Repaint 中多次调用 `GetSubTracks()`，避免每帧 List 分配。
+
+#### D.1.2 `LayerConfig.GetAllClipNodes()` — 同上缓存策略
+
+**现状**: 每次调用分配新 `List<ControllerClipNode>()`。
+**优化**: 传入预分配列表或缓存：
+```csharp
+public void GetAllClipNodes(List<ControllerClipNode> result)
+{
+    result.Clear();
+    result.AddRange(Clips);
+    foreach (ControllerSubNode subNode in Subs)
+        result.AddRange(subNode.Clips);
+}
+```
+
+#### D.1.3 `TrackAsset.UpdateDuration()` — 避免每次调用 `GetClips()`
+
+**现状**: `GetStart()` 和 `GetEnd()` 各调用 `UpdateDuration()`，各触发一次 `GetClips()`。连续调用 `GetStart()` + `GetEnd()` 会重复计算。
+**优化**: 引入脏标记，仅在 Clip 增删或时间变化时重新计算：
+```csharp
+private bool _durationDirty = true;
+
+public double GetStart()
+{
+    if (_durationDirty) UpdateDuration();
+    return _start;
+}
+
+// 在 AddClip/RemoveClip 时设置 _durationDirty = true
+```
+
+### D.2 查找性能优化
+
+#### D.2.1 `LayerConfig.GetClipNode(int nodeId)` — 改用 Dictionary
+
+**现状**: O(n) 线性搜索 Clips + Subs（递归）+ BlendTrees。
+**优化**: 为 `LayerConfig` 维护一个 `Dictionary<int, ControllerNode>` 索引：
+```csharp
+private Dictionary<int, ControllerNode> _nodeIndex;
+
+private void RebuildNodeIndex()
+{
+    _nodeIndex ??= new Dictionary<int, ControllerNode>();
+    _nodeIndex.Clear();
+    _nodeIndex[Entry.ID] = Entry;
+    _nodeIndex[Any.ID] = Any;
+    _nodeIndex[Exit.ID] = Exit;
+    foreach (var clip in Clips) _nodeIndex[clip.ID] = clip;
+    foreach (var sub in Subs) { _nodeIndex[sub.ID] = sub; /* 递归 sub.Clips */ }
+    foreach (var bt in BlendTrees) _nodeIndex[bt.ID] = bt;
+}
+```
+在节点增删时调用 `RebuildNodeIndex()` 或标记脏。
+
+#### D.2.2 `AIGraph.FindNode(int)` 和 `ExistNode(int)` — 改用 Dictionary
+
+**现状**: O(n) 遍历 `Nodes` 列表。
+**优化**: 维护 `Dictionary<int, AINode> _nodeMap`，在 AddNode/RemoveNode 时同步更新。
+
+#### D.2.3 `AIGraph.GetNewNodeID()` — 维护递增计数器
+
+**现状**: O(n²)，从 0 开始逐个检查是否冲突。
+**优化**: 
+```csharp
+private int _nextNodeId = 0;
+
+public int GetNewNodeID()
+{
+    return _nextNodeId++;
+    // 如果需要验证唯一性（节点被删除后 ID 不回收），直接递增即可
+}
+```
+
+#### D.2.4 `XTimelineControllerConfig.FindBoard()` / `ExistBoardName()` — O(n) → Dictionary
+
+**现状**: 每次调用都线性遍历 `Boards` 列表。
+**优化**: 维护 `Dictionary<string, XTimelineCondition>` 索引，在 Add/Delete 时同步更新。
+
+### D.3 类型系统优化
+
+#### D.3.1 `Dictionary<long, ClipAsset>` → `Dictionary<int, ClipAsset>`
+
+**现状**: 键类型为 `long`，但实际存储的 `_runtimeUniqueId` 是 `int`。`long` 作为 Dictionary key 需要装箱或额外的哈希计算。
+**优化**: 统一为 `int` key，减少内存占用。
+
+#### D.3.2 `IList` → 泛型接口或具体类型
+
+**现状**: `XTimelineTrackEntityBase` 的 `Dictionary<Type, IList>` 和 `XTimelineConfigBase` 的 `IList m_Caches` 使用非泛型 `IList`，每次取出元素需要 `as` 转换。
+**影响**: 值类型元素会装箱（虽然当前只存引用类型），丧失编译期类型检查。
+**评估**: 由于设计上需要存储不同泛型类型的列表，`IList` 是合理的权衡。但 `m_Caches`（存储 Entity 列表）可以改为 `IList<XTimelineTrackEntityBase>`。
+
+### D.4 序列化性能优化
+
+#### D.4.1 `AIJsonSerializer` — 复用 JsonSerializerOptions
+
+**现状**: 4 个静态 `JsonSerializerOptions` 实例，本身已是好的做法（避免重复创建）。
+**额外优化**: 考虑使用 `JsonSerializer.Serialize(stream, ...)` 流式写入替代 `Serialize → string → File.WriteAllText`，减少一次完整字符串分配：
+```csharp
+using var stream = File.Create(path);
+JsonSerializer.Serialize(stream, config, kSerializeFileOptions);
+```
+
+#### D.4.2 `AIGraph.Deserialize()` — 避免 UTF8 编码中间步骤
+
+**现状**: `UTF8Encoding.UTF8.GetBytes(serializedGraph)` 将 string 转为 byte[]，再传给 `JsonSerializer`。
+**优化**: `System.Text.Json` 可直接反序列化 `ReadOnlySpan<char>`（string）:
+```csharp
+AIConfig config = JsonSerializer.Deserialize<AIConfig>(serializedGraph, options);
+```
+
+### D.5 算法优化
+
+#### D.5.1 `XTimelineTrackAsset<T>.HasClip()` — 使用 InstanceID 直接比较
+
+**现状**: O(n) 遍历，对每个 Clip 调用 `GetInstanceID()` 比较。
+**评估**: 对于少量 Clip（通常 <20）的轨道，线性搜索可接受。如果未来 Clip 数量增长，可改为 `HashSet<int>` 维护已有 Clip 的 InstanceID。
+
+#### D.5.2 `TrackAsset.GetLockedInHierarchy()` — 缓存结果
+
+**现状**: 每次调用向上遍历父链。
+**优化**: 在 `Locked` 属性变化时向子树广播脏标记，或缓存 `_lockedInHierarchy` 结果。
+
+#### D.5.3 `SkillConfig.CacheRuntimeClips()` — 30+ 次方法调用
+
+**现状**: `CacheEntities` 内对每个 Entity 调用 30+ 次 `CacheRuntimeClip<K,L>()`，每次传入不同的轨道列表。
+**评估**: 这是数据驱动的必然成本，但可以通过反射或注册机制减少手动调用：
+```csharp
+// 在 SkillTrackEntity.BindTracks() 中注册的 Dictionary<Type, IList> 已包含所有轨道
+// 可利用此映射自动遍历所有轨道，减少手写调用
+protected override void CacheRuntimeClips()
+{
+    foreach (var entity in Entities)
+    {
+        foreach (var pair in entity.GetCaches())
+        {
+            CacheRuntimeClipByIList(entity, pair.Value);
+        }
+    }
+}
+```
+> **权衡**: 自动化减少维护成本但增加运行时反射/类型检查开销。当前 30+ 手写调用虽冗长但零运行时开销且类型安全。
+
+### D.6 编辑器性能优化
+
+#### D.6.1 `AIEditor.Update()` 每帧 `Repaint()`
+
+**文件**: `Assets/_Scripts/XTimeline/Editor/AI/AIEditor.cs`，第 47-50 行
+
+**问题**: 无条件每帧重绘，即使画布无变化。
+**优化**: 改为条件重绘：
+```csharp
+private void Update()
+{
+    if (Graph != null && Graph.RepaintDirty)
+    {
+        Repaint();
+        Graph.RepaintDirty = false;
+    }
+}
+```
+
+#### D.6.2 `ActionManager.HandleShortcut()` 每帧反射查询
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Editor/Actions/ActionManager.cs`，第 176-195 行
+
+**问题**: 每次键盘事件都对每个 Action 调用 `GetCustomAttributes(typeof(ShortcutAttribute), true)`，涉及反射。
+**优化**: 在静态初始化时缓存 Action→ShortcutAttribute 映射：
+```csharp
+static readonly Dictionary<IAction, ShortcutAttribute[]> s_ShortcutCache = new Dictionary<IAction, ShortcutAttribute[]>();
+
+// 初始化时填充
+// 使用时从缓存读取
+```
+
+#### D.6.3 `ActionManager.BuildMenu()` LINQ 排序
+
+**文件**: `Packages/com.the.xtimeline@1.0.0/Editor/Actions/ActionManager.cs`，第 120 行
+
+**问题**: `items.GroupBy().OrderBy().SelectMany()` 链式 LINQ 每次构建菜单时执行，产生多个中间迭代器分配。
+**评估**: 菜单构建不频繁（仅右键时），可接受。如果需要优化，改用手动排序。
+
+### D.7 总结优先级
+
+| 优先级 | 优化项 | 预估收益 | 改动量 |
+|--------|--------|---------|--------|
+| 🔴 高 | 修复 `CleanDirtyData` 遍历 Bug (C.1.2) | 数据正确性 | 1 行 |
+| 🔴 高 | 修复 `_cacheSorted` 失效 (C.1.4) | 排序正确性 | 3-5 行 |
+| 🔴 高 | `ObjectUtility.GetAddress` 内存泄漏 (C.2.4) | 内存安全 | 5 行 |
+| 🔴 高 | `Config.Dispose()` 后空指针 (C.1.3) | 运行稳定性 | 3 行 |
+| 🟡 中 | `GetHashCode` 不稳定 (C.1.1) | Dictionary 正确性 | 2 行 |
+| 🟡 中 | `Dictionary<long>` → `Dictionary<int>` (D.3.1) | 内存减少 | 3 行 |
+| 🟡 中 | `DiscreteTime(frame, fps)` 语义错误 (C.3.8) | 时间计算正确性 | 1 行 |
+| 🟡 中 | `RemoveEntity` 返回值 Bug (C.3.3) | 逻辑正确性 | 1 行 |
+| 🟢 低 | `GetSubTracks`/`GetAllClipNodes` 缓存 (D.1) | 减少 GC | 15-20 行 |
+| 🟢 低 | `FindNode`/`GetClipNode` Dictionary 化 (D.2) | 查找提速 | 20-30 行 |
+| 🟢 低 | `AIEditor.Update` 条件重绘 (D.6.1) | 编辑器性能 | 5 行 |
+| 🟢 低 | 反射缓存 Shortcut (D.6.2) | 编辑器性能 | 10 行 |
+
+</div>
+</body>
+</html>
